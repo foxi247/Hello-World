@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: alders-world
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm install --prefix server && npm install --prefix client && npm run build --prefix server && npm run build --prefix client
+    startCommand: node server/dist/server/src/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: MISTRAL_MODEL
+        value: mistral-large-latest
+      - key: AI_THINK_INTERVAL
+        value: "20"
+      - key: AI_THOUGHT_INTERVAL
+        value: "15"
