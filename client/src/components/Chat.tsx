@@ -11,9 +11,15 @@ export function Chat({ messages, connected, onSend }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   const handleSend = useCallback(() => {
@@ -72,7 +78,7 @@ export function Chat({ messages, connected, onSend }: Props) {
       </div>
 
       {/* Messages */}
-      <div style={{
+      <div ref={scrollRef} style={{
         flex: 1,
         overflowY: 'auto',
         padding: '10px 12px',

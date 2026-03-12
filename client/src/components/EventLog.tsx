@@ -25,9 +25,15 @@ const EVENT_COLORS: Record<string, string> = {
 
 export function EventLog({ events }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (isAtBottom) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [events]);
 
   return (
@@ -47,7 +53,7 @@ export function EventLog({ events }: Props) {
       }}>
         📋 Event Log
       </div>
-      <div style={{
+      <div ref={scrollRef} style={{
         height: 120,
         overflowY: 'auto',
         padding: '6px 10px',
