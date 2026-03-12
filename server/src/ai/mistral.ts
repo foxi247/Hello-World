@@ -1,15 +1,21 @@
 import dotenv from 'dotenv';
-dotenv.config();
+import path from 'path';
+import { execFile } from 'child_process';
+
+// Load .env from server/ or parent dirs
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 // ============================================================
-// Mistral API Adapter
-// Server-side only — ключ никогда не покидает сервер
+// Mistral API Adapter — server-side only, key never leaves server
+// Uses curl via child_process for reliable DNS in all environments
 // ============================================================
 
 const MISTRAL_API_URL = 'https://api.mistral.ai/v1/chat/completions';
-const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
-const MISTRAL_MODEL = process.env.MISTRAL_MODEL || 'mistral-large-latest';
-const API_TIMEOUT_MS = 30_000;
+const API_TIMEOUT_MS  = 30_000;
+
+function getKey():   string { return process.env.MISTRAL_API_KEY  ?? ''; }
+function getModel(): string { return process.env.MISTRAL_MODEL ?? 'mistral-large-latest'; }
 
 export interface MistralMessage {
   role: 'system' | 'user' | 'assistant';
@@ -23,67 +29,72 @@ export interface MistralResponse {
 }
 
 // ============================================================
-// Core API call with timeout + error handling
+// Call via curl — bypasses Node.js DNS issues in sandbox envs
 // ============================================================
-export async function callMistral(
+export function callMistral(
   messages: MistralMessage[],
-  options: {
-    maxTokens?: number;
-    temperature?: number;
-  } = {}
+  options: { maxTokens?: number; temperature?: number } = {}
 ): Promise<MistralResponse> {
-  if (!MISTRAL_API_KEY) {
-    console.warn('[Mistral] No API key configured — using fallback');
-    return { content: '', success: false, error: 'No API key configured' };
+  const apiKey = getKey();
+
+  if (!apiKey) {
+    console.warn('[Mistral] No API key — using fallback');
+    return Promise.resolve({ content: '', success: false, error: 'No API key' });
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const body = JSON.stringify({
+    model: getModel(),
+    messages,
+    max_tokens: options.maxTokens ?? 300,
+    temperature: options.temperature ?? 0.7,
+  });
 
-  try {
-    const response = await fetch(MISTRAL_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${MISTRAL_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MISTRAL_MODEL,
-        messages,
-        max_tokens: options.maxTokens ?? 300,
-        temperature: options.temperature ?? 0.7,
-      }),
-      signal: controller.signal,
+  return new Promise((resolve) => {
+    const args = [
+      '--silent',
+      '--max-time', String(Math.floor(API_TIMEOUT_MS / 1000)),
+      '-X', 'POST',
+      '-H', 'Content-Type: application/json',
+      '-H', `Authorization: Bearer ${apiKey}`,
+      '-d', body,
+      MISTRAL_API_URL,
+    ];
+
+    const proc = execFile('curl', args, { timeout: API_TIMEOUT_MS }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('[Mistral] curl error:', error.message);
+        resolve({ content: '', success: false, error: error.message });
+        return;
+      }
+
+      try {
+        const data = JSON.parse(stdout) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          error?: { message?: string };
+        };
+
+        if (data.error) {
+          console.error('[Mistral] API error:', data.error.message);
+          resolve({ content: '', success: false, error: data.error.message });
+          return;
+        }
+
+        const content = data.choices?.[0]?.message?.content?.trim() ?? '';
+        resolve({ content, success: true });
+      } catch (e) {
+        console.error('[Mistral] Parse error, stdout:', stdout.slice(0, 200));
+        resolve({ content: '', success: false, error: `Parse error: ${e}` });
+      }
     });
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => 'unknown');
-      console.error(`[Mistral] API error ${response.status}: ${text}`);
-      return { content: '', success: false, error: `API ${response.status}: ${text}` };
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-
-    const content = data.choices?.[0]?.message?.content?.trim() ?? '';
-    return { content, success: true };
-  } catch (err: unknown) {
-    clearTimeout(timeoutId);
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes('abort') || message.includes('AbortError')) {
-      console.error('[Mistral] Request timed out after', API_TIMEOUT_MS, 'ms');
-      return { content: '', success: false, error: 'Request timed out' };
-    }
-    console.error('[Mistral] Network error:', message);
-    return { content: '', success: false, error: message };
-  }
+    proc.on('error', (err) => {
+      resolve({ content: '', success: false, error: `spawn error: ${err.message}` });
+    });
+  });
 }
 
 // ============================================================
-// Convenience: single user message with system prompt
+// Convenience helper
 // ============================================================
 export async function askMistral(
   systemPrompt: string,
@@ -100,23 +111,14 @@ export async function askMistral(
 }
 
 // ============================================================
-// Health check — для smoke test
+// Health check
 // ============================================================
 export async function pingMistral(): Promise<{
-  ok: boolean;
-  model: string;
-  hasKey: boolean;
-  message: string;
+  ok: boolean; model: string; hasKey: boolean; message: string;
 }> {
-  const hasKey = Boolean(MISTRAL_API_KEY);
-
+  const hasKey = Boolean(getKey());
   if (!hasKey) {
-    return {
-      ok: false,
-      model: MISTRAL_MODEL,
-      hasKey: false,
-      message: 'MISTRAL_API_KEY not set in .env',
-    };
+    return { ok: false, model: getModel(), hasKey: false, message: 'MISTRAL_API_KEY not set' };
   }
 
   const result = await callMistral(
@@ -126,7 +128,7 @@ export async function pingMistral(): Promise<{
 
   return {
     ok: result.success,
-    model: MISTRAL_MODEL,
+    model: getModel(),
     hasKey: true,
     message: result.success
       ? `API OK — response: "${result.content}"`
