@@ -46,7 +46,7 @@ app.use(express.json());
 // ============================================================
 // Serve built frontend static files
 // ============================================================
-const STATIC_DIR = path.resolve(__dirname, '../../client/dist');
+const STATIC_DIR = path.resolve(__dirname, '../../../../client/dist');
 app.use(express.static(STATIC_DIR));
 
 // ============================================================
