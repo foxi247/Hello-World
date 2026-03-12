@@ -35,8 +35,15 @@ const app   = express();
 const server = http.createServer(app);
 const wss   = new WebSocketServer({ server });
 
-app.use(cors({ origin: 'http://localhost:3000' }));
+// Allow any origin (needed for public tunnel access)
+app.use(cors());
 app.use(express.json());
+
+// ============================================================
+// Serve built frontend static files
+// ============================================================
+const STATIC_DIR = path.resolve(__dirname, '../../client/dist');
+app.use(express.static(STATIC_DIR));
 
 // ============================================================
 // Create simulation and wire up callbacks
@@ -58,8 +65,10 @@ wsHandler = new WSHandler(wss, simulation);
 // ============================================================
 app.use('/api', createApiRouter(world));
 
-// 404 fallback
-app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
+// SPA fallback — все не-API маршруты отдают index.html
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(STATIC_DIR, 'index.html'));
+});
 
 // ============================================================
 // Start

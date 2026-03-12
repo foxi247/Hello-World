@@ -1,8 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { WSServerMessage, WSClientMessage, WorldState, CharacterState, GameEvent, ChatMessage } from '../types';
 
-// Используем реальный hostname браузера — работает и локально, и с телефона
-const WS_URL = `ws://${window.location.hostname}:3001`;
+// Подключаемся к тому же хосту и порту что и сам сайт (работает через туннель)
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = `${protocol}//${window.location.host}`;
 const RECONNECT_DELAY_MS = 3000;
 
 export interface GameStateSlice {
