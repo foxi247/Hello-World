@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { WSServerMessage, WSClientMessage, WorldState, CharacterState, GameEvent, ChatMessage } from '../types';
 
-const WS_URL = `ws://localhost:3001`;
+// Используем реальный hostname браузера — работает и локально, и с телефона
+const WS_URL = `ws://${window.location.hostname}:3001`;
 const RECONNECT_DELAY_MS = 3000;
 
 export interface GameStateSlice {
