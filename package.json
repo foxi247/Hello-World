@@ -7,6 +7,7 @@
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
     "build": "npm run build --prefix server && npm run build --prefix client",
     "start": "npm run start --prefix server",
+    "start:prod": "npm install --prefix server && npm install --prefix client && npm run build && node server/dist/server/src/index.js",
     "test:smoke": "cd server && npm run test:smoke"
   },
   "devDependencies": {

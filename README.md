@@ -43,7 +43,22 @@ A locally-runnable 2D world simulation with an autonomous AI character whose bra
 
 ---
 
-## Prerequisites
+## Deploy to Railway (recommended for public access)
+
+Railway supports WebSockets + SQLite + long-running processes — perfect for this project.
+
+1. Push this repo to GitHub
+2. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**
+3. Select the repository
+4. Add environment variable: `MISTRAL_API_KEY=your_key`
+5. Railway auto-detects `nixpacks.toml` and builds everything
+6. Get your public URL from the Railway dashboard
+
+The `nixpacks.toml` at the root handles the full build + start automatically.
+
+---
+
+## Prerequisites (local run)
 
 - Node.js 18+
 - npm 9+

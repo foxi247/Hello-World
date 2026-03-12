@@ -1,8 +1,12 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 // Load .env from server/ first, then fall back to parent dir
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+// Ensure data directory exists (needed for SQLite on Railway/Render)
+const dataDir = path.resolve(__dirname, '../../data');
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 import express from 'express';
 import cors from 'cors';
 import http from 'http';

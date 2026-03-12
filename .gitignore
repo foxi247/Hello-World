@@ -5,6 +5,7 @@ dist/
 server/dist/
 client/dist/
 .env
+server/data/
 *.db
 *.db-journal
 *.db-wal
