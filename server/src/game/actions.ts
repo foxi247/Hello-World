@@ -103,7 +103,11 @@ export function progressAction(
     const dist = Math.abs(dx) + Math.abs(dy);
 
     if (dist > 0) {
-      stepToward(char, tiles);
+      const moved = stepToward(char, tiles);
+      if (!moved) {
+        // BFS found no path — give up and pick a new action
+        return { completed: true, eventMessage: 'The path is blocked.' };
+      }
       char.actionProgress = Math.min(char.actionProgress + 5, 95);
       return { completed: false };
     }
@@ -216,35 +220,64 @@ function executeAtTarget(
 }
 
 // ============================================================
-// Move one step toward target (Manhattan path)
+// Move one step toward target using BFS to navigate around walls
 // ============================================================
-function stepToward(char: CharacterState, tiles: WorldTile[][]): void {
-  if (!char.targetPosition) return;
+function stepToward(char: CharacterState, tiles: WorldTile[][]): boolean {
+  if (!char.targetPosition) return false;
 
-  const dx = char.targetPosition.x - char.position.x;
-  const dy = char.targetPosition.y - char.position.y;
-
-  // Try to move in the axis with greater distance first
-  const candidates: Array<{ x: number; y: number }> = [];
-
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    candidates.push({ x: char.position.x + Math.sign(dx), y: char.position.y });
-    candidates.push({ x: char.position.x, y: char.position.y + Math.sign(dy) });
-  } else {
-    candidates.push({ x: char.position.x, y: char.position.y + Math.sign(dy) });
-    candidates.push({ x: char.position.x + Math.sign(dx), y: char.position.y });
+  const next = bfsNextStep(tiles, char.position, char.targetPosition);
+  if (next) {
+    char.position = next;
+    return true;
   }
+  return false;
+}
 
-  for (const candidate of candidates) {
-    if (
-      candidate.x >= 0 && candidate.x < WORLD_WIDTH &&
-      candidate.y >= 0 && candidate.y < WORLD_HEIGHT &&
-      tiles[candidate.y][candidate.x].passable
-    ) {
-      char.position = candidate;
-      return;
+function bfsNextStep(
+  tiles: WorldTile[][],
+  start: { x: number; y: number },
+  end: { x: number; y: number }
+): { x: number; y: number } | null {
+  if (start.x === end.x && start.y === end.y) return null;
+
+  const dirs = [
+    { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 }, { dx: 1, dy: 0 },
+  ];
+
+  const queue: Array<{ x: number; y: number }> = [start];
+  const parent = new Map<string, { x: number; y: number } | null>();
+  parent.set(`${start.x},${start.y}`, null);
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+
+    for (const { dx, dy } of dirs) {
+      const nx = cur.x + dx;
+      const ny = cur.y + dy;
+      const key = `${nx},${ny}`;
+
+      if (nx < 0 || nx >= WORLD_WIDTH || ny < 0 || ny >= WORLD_HEIGHT) continue;
+      if (parent.has(key)) continue;
+      if (!tiles[ny][nx].passable) continue;
+
+      parent.set(key, cur);
+
+      if (nx === end.x && ny === end.y) {
+        // Trace back to find the first step from start
+        let node = { x: nx, y: ny };
+        while (true) {
+          const p = parent.get(`${node.x},${node.y}`)!;
+          if (p === null || (p.x === start.x && p.y === start.y)) return node;
+          node = p;
+        }
+      }
+
+      queue.push({ x: nx, y: ny });
     }
   }
+
+  return null; // no path found
 }
 
 // ============================================================
