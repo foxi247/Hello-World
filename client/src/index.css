@@ -1,0 +1,52 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  background: #0d0d0d;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: #cccccc;
+  overflow-x: hidden;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #111;
+}
+::-webkit-scrollbar-thumb {
+  background: #334433;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #446644;
+}
+
+/* Pulsing animation for low needs */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* Phaser canvas override */
+canvas {
+  display: block;
+}
+
+/* Remove textarea default styling */
+textarea {
+  font-family: inherit;
+}
+
+button {
+  font-family: inherit;
+}

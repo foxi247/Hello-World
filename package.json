@@ -1,0 +1,15 @@
+{
+  "name": "ai-world-sim",
+  "version": "1.0.0",
+  "description": "2D autonomous AI character world simulation",
+  "scripts": {
+    "dev": "concurrently -n \"server,client\" -c \"blue,green\" \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "build": "npm run build --prefix server && npm run build --prefix client",
+    "start": "npm run start --prefix server",
+    "test:smoke": "cd server && npm run test:smoke"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
