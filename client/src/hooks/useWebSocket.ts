@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import type { WSServerMessage, WSClientMessage, WorldState, CharacterState, GameEvent, ChatMessage } from '../types';
+import type { WSServerMessage, WSClientMessage, WorldState, CharacterState, GameEvent, ChatMessage, NPCState, Invention } from '../types';
 
 // Подключаемся к тому же хосту и порту что и сам сайт (работает через туннель)
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -18,6 +18,8 @@ export function useWebSocket(
   onTileUpdate: (x: number, y: number) => void,
   onThought: (t: string) => void,
   onDayPhase: (phase: string, progress: number) => void,
+  onNPCUpdate?: (npcs: NPCState[]) => void,
+  onInvention?: (inv: Invention) => void,
 ) {
   const [worldState, setWorldState] = useState<WorldState | null>(null);
   const [connected, setConnected] = useState(false);
@@ -125,11 +127,21 @@ export function useWebSocket(
         );
         break;
 
+      case 'NPC_UPDATE':
+        setWorldState(prev => prev ? { ...prev, npcs: msg.payload } : prev);
+        onNPCUpdate?.(msg.payload);
+        break;
+
+      case 'INVENTION':
+        setWorldState(prev => prev ? { ...prev, inventions: [...(prev.inventions || []), msg.payload] } : prev);
+        onInvention?.(msg.payload);
+        break;
+
       case 'ERROR':
         console.error('[WS] Server error:', msg.payload);
         break;
     }
-  }, [onCharacterUpdate, onTileUpdate, onThought, onDayPhase]);
+  }, [onCharacterUpdate, onTileUpdate, onThought, onDayPhase, onNPCUpdate, onInvention]);
 
   const sendMessage = useCallback((msg: WSClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

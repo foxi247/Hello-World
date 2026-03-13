@@ -2,37 +2,52 @@ import { WorldManager } from './world';
 import { startAction, progressAction } from './actions';
 import {
   decayNeeds,
+  decayNPCNeeds,
   updateComfort,
   isNearHome,
   detectUrgentNeed,
   getAvailableActions,
   canBuild,
+  createNPC,
+  addToInventory,
+  getInventoryAmount,
 } from './character';
-import { generateThought, selectIntent, summarizeIntoMemory } from '../ai/mind';
-import type { ActionType } from '../../../shared/types';
+import { generateThought, selectIntent, summarizeIntoMemory, generateInvention } from '../ai/mind';
+import type { ActionType, NPCState, Invention } from '../../../shared/types';
+import { v4 as uuidv4 } from 'uuid';
+import {
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
+  findTilesOfType,
+  findAdjacentPassable,
+} from './worldMap';
 
 // ============================================================
-// Simulation configuration
+// Конфигурация симуляции
 // ============================================================
-const TICK_INTERVAL_MS = 1000;         // 1 second per tick
+const TICK_INTERVAL_MS = 1000;
 const AI_THINK_INTERVAL  = parseInt(process.env.AI_THINK_INTERVAL  ?? '20');
 const AI_THOUGHT_INTERVAL = parseInt(process.env.AI_THOUGHT_INTERVAL ?? '15');
-const PERSIST_INTERVAL = 30;            // persist every 30 ticks
-const MEMORY_SUMMARIZE_INTERVAL = 60;   // summarize memories every 60 ticks
+const PERSIST_INTERVAL = 30;
+const MEMORY_SUMMARIZE_INTERVAL = 60;
+const INVENTION_INTERVAL = 300;      // каждые 300 тиков попытка изобретения
+const NPC_SPAWN_CHECK_INTERVAL = 200; // каждые 200 тиков проверка спавна NPC
 
 // ============================================================
-// Callbacks to notify the WebSocket layer
+// Колбэки для WebSocket
 // ============================================================
 export type SimulationCallbacks = {
   onCharacterUpdate: () => void;
+  onNPCUpdate: () => void;
   onNewEvent: () => void;
   onThought: (thought: string) => void;
   onTileChanged: (x: number, y: number) => void;
   onDayPhase: () => void;
+  onInvention: (invention: Invention) => void;
 };
 
 // ============================================================
-// Simulation class
+// Класс симуляции
 // ============================================================
 export class Simulation {
   private _world: WorldManager;
@@ -40,9 +55,11 @@ export class Simulation {
   private _callbacks: SimulationCallbacks;
   private _aiThinkBusy = false;
   private _thoughtBusy  = false;
+  private _inventionBusy = false;
   private _pendingIntentAction: ActionType | null = null;
   private _ticksSinceLastIntent = 0;
   private _ticksSinceLastThought = 0;
+  private _ticksSinceLastInvention = 0;
   private _recentEventMessages: string[] = [];
 
   constructor(world: WorldManager, callbacks: SimulationCallbacks) {
@@ -52,7 +69,7 @@ export class Simulation {
 
   start(): void {
     if (this._timer) return;
-    console.log('[Simulation] Starting loop, tick interval:', TICK_INTERVAL_MS, 'ms');
+    console.log('[Simulation] Запуск цикла, интервал тика:', TICK_INTERVAL_MS, 'мс');
     this._timer = setInterval(() => this._tick(), TICK_INTERVAL_MS);
   }
 
@@ -64,24 +81,30 @@ export class Simulation {
   }
 
   // ----------------------------------------------------------
-  // Main tick
+  // Главный тик
   // ----------------------------------------------------------
   private async _tick(): Promise<void> {
     const char = this._world.character;
     const tiles = this._world.tiles;
 
-    // 1. Advance time
+    // 1. Время
     this._world.advanceTick();
     this._ticksSinceLastIntent++;
     this._ticksSinceLastThought++;
+    this._ticksSinceLastInvention++;
 
-    // 2. Decay needs
+    // 2. Деградация потребностей
     decayNeeds(char);
     updateComfort(char, isNearHome(char));
 
-    // 3. Process current action
+    // 3. NPC потребности
+    for (const npc of this._world.npcs) {
+      decayNPCNeeds(npc);
+      this._tickNPC(npc, tiles);
+    }
+
+    // 4. Текущее действие
     if (char.currentAction === 'IDLE' || char.currentAction === 'MOVE_TO') {
-      // Start a new action
       this._startNewAction();
     } else {
       const result = progressAction(char, tiles);
@@ -104,59 +127,75 @@ export class Simulation {
 
     this._callbacks.onCharacterUpdate();
 
-    // 4. Periodic thought generation (non-blocking)
+    // 5. Генерация мыслей
     if (this._ticksSinceLastThought >= AI_THOUGHT_INTERVAL && !this._thoughtBusy) {
       this._ticksSinceLastThought = 0;
       this._generateThought();
     }
 
-    // 5. Periodic intent selection (non-blocking)
+    // 6. Выбор намерения
     if (this._ticksSinceLastIntent >= AI_THINK_INTERVAL && !this._aiThinkBusy) {
       this._ticksSinceLastIntent = 0;
       this._selectNextIntent();
     }
 
-    // 6. Persist periodically
+    // 7. Система изобретений
+    if (this._ticksSinceLastInvention >= INVENTION_INTERVAL && !this._inventionBusy) {
+      if (char.needs.hunger > 50 && char.needs.energy > 40 && char.needs.mood > 40) {
+        this._ticksSinceLastInvention = 0;
+        this._tryInvention();
+      }
+    }
+
+    // 8. Спавн NPC
+    if (this._world.tick % NPC_SPAWN_CHECK_INTERVAL === 0) {
+      this._checkNPCSpawn();
+    }
+
+    // 9. Сохранение
     if (this._world.tick % PERSIST_INTERVAL === 0) {
       this._world.persist();
     }
 
-    // 7. Memory summarization
+    // 10. Суммаризация памяти
     if (this._world.tick % MEMORY_SUMMARIZE_INTERVAL === 0 && this._recentEventMessages.length > 3) {
       const events = [...this._recentEventMessages];
       this._recentEventMessages = [];
       summarizeIntoMemory(char, events, this._world.tick).catch(console.error);
     }
 
-    // 8. Day phase change notification
+    // 11. Фаза дня
     if (this._world.tick % 5 === 0) {
       this._callbacks.onDayPhase();
+    }
+
+    // 12. NPC update broadcast
+    if (this._world.npcs.length > 0 && this._world.tick % 3 === 0) {
+      this._callbacks.onNPCUpdate();
     }
   }
 
   // ----------------------------------------------------------
-  // Start a new action — uses pending intent or picks sensible default
+  // Начать новое действие
   // ----------------------------------------------------------
   private _startNewAction(): void {
     const char = this._world.character;
     const tiles = this._world.tiles;
 
-    // Check urgent needs first (these override AI intent)
     const urgent = detectUrgentNeed(char);
     let nextAction: ActionType = 'WANDER';
 
     if (urgent) {
-      if (urgent.includes('eat') || urgent.includes('food')) {
+      if (urgent.includes('голод') || urgent.includes('еды') || urgent.includes('hunger') || urgent.includes('food')) {
         const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
         nextAction = hasFood ? 'EAT' : 'COLLECT_FOOD';
-      } else if (urgent.includes('rest') || urgent.includes('energy')) {
+      } else if (urgent.includes('сил') || urgent.includes('отдох') || urgent.includes('rest') || urgent.includes('energy')) {
         nextAction = 'REST';
       }
     } else if (this._pendingIntentAction) {
       nextAction = this._pendingIntentAction;
       this._pendingIntentAction = null;
     } else {
-      // Rule-based fallback
       nextAction = this._ruleBasedAction();
     }
 
@@ -167,7 +206,7 @@ export class Simulation {
   }
 
   // ----------------------------------------------------------
-  // Rule-based action selection (used when LLM hasn't responded yet)
+  // Умное правило-основанное действие
   // ----------------------------------------------------------
   private _ruleBasedAction(): ActionType {
     const char = this._world.character;
@@ -176,18 +215,222 @@ export class Simulation {
     const woodAmt  = inv.find(i => i.type === 'wood')?.amount  ?? 0;
     const stoneAmt = inv.find(i => i.type === 'stone')?.amount ?? 0;
 
+    // Срочные потребности
     if (char.needs.hunger < 30 && foodAmt > 0) return 'EAT';
     if (char.needs.hunger < 50 && foodAmt === 0) return 'COLLECT_FOOD';
     if (char.needs.energy < 30) return 'REST';
+
+    // Строительство — приоритет если можно
     if (canBuild(char)) return 'BUILD';
-    if (woodAmt < 8) return 'COLLECT_WOOD';
-    if (stoneAmt < 5) return 'COLLECT_STONE';
+
+    // Умная сборка ресурсов под следующий уровень
+    const level = char.homeLevel;
+    const needWood  = this._woodNeededForNextLevel(level);
+    const needStone = this._stoneNeededForNextLevel(level);
+
+    if (woodAmt < needWood) return 'COLLECT_WOOD';
+    if (stoneAmt < needStone) return 'COLLECT_STONE';
     if (foodAmt < 5) return 'COLLECT_FOOD';
+
+    // Изобретения если всё хорошо
+    if (char.needs.mood > 60 && char.needs.hunger > 60 && Math.random() < 0.2) return 'INVENT';
+
     return Math.random() < 0.3 ? 'THINK' : 'WANDER';
   }
 
+  private _woodNeededForNextLevel(level: number): number {
+    if (level === 0) return 0;
+    if (level === 1) return 5;
+    if (level === 2) return 10;
+    if (level === 3) return 20;
+    if (level === 4) return 30;
+    return 10;
+  }
+
+  private _stoneNeededForNextLevel(level: number): number {
+    if (level === 0) return 0;
+    if (level === 1) return 3;
+    if (level === 2) return 8;
+    if (level === 3) return 15;
+    if (level === 4) return 20;
+    return 5;
+  }
+
   // ----------------------------------------------------------
-  // Async thought generation
+  // NPC тик — автономное поведение
+  // ----------------------------------------------------------
+  private _tickNPC(npc: NPCState, tiles: import('../../../shared/types').WorldTile[][]): void {
+    // Workers auto-collect resources
+    if (npc.role === 'worker') {
+      if (npc.needs.hunger < 20 || npc.needs.energy < 15) {
+        // NPC отдыхает или ест из общих запасов
+        if (npc.needs.energy < 15) {
+          npc.needs.energy += 0.5;
+          npc.currentTask = 'отдыхает';
+        } else {
+          const char = this._world.character;
+          const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+          if (hasFood) {
+            hasFood.amount -= 1;
+            if (hasFood.amount <= 0) char.inventory = char.inventory.filter(i => i.amount > 0);
+            npc.needs.hunger += 20;
+            npc.currentTask = 'ест';
+          }
+        }
+        return;
+      }
+
+      // Auto-collect nearest resource
+      npc.actionProgress += 5;
+      if (npc.actionProgress >= 100) {
+        npc.actionProgress = 0;
+        // Randomly choose resource to collect
+        const roll = Math.random();
+        const type = roll < 0.4 ? 'wood' : roll < 0.7 ? 'stone' : 'food';
+        const char = this._world.character;
+        addToInventory(char, type as any, 1);
+        npc.currentTask = `собрал ${type === 'wood' ? 'дерево' : type === 'stone' ? 'камень' : 'еду'}`;
+
+        // Move NPC around slightly
+        const dx = Math.floor(Math.random() * 3) - 1;
+        const dy = Math.floor(Math.random() * 3) - 1;
+        const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
+        const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
+        if (tiles[ny]?.[nx]?.passable) {
+          npc.position = { x: nx, y: ny };
+        }
+      } else {
+        npc.currentTask = 'работает';
+      }
+    }
+
+    // Companions stay near Alder
+    if (npc.role === 'companion') {
+      const char = this._world.character;
+      const dist = Math.abs(npc.position.x - char.position.x) + Math.abs(npc.position.y - char.position.y);
+      if (dist > 3) {
+        // Move toward Alder
+        const dx = Math.sign(char.position.x - npc.position.x);
+        const dy = Math.sign(char.position.y - npc.position.y);
+        const nx = npc.position.x + dx;
+        const ny = npc.position.y + dy;
+        if (tiles[ny]?.[nx]?.passable) {
+          npc.position = { x: nx, y: ny };
+        }
+      }
+      npc.currentTask = 'рядом';
+
+      // Companion boosts mood
+      if (dist <= 2) {
+        char.needs.mood = Math.min(100, char.needs.mood + 0.02);
+      }
+    }
+
+    // Children wander around home
+    if (npc.role === 'child') {
+      if (Math.random() < 0.05) {
+        const dx = Math.floor(Math.random() * 3) - 1;
+        const dy = Math.floor(Math.random() * 3) - 1;
+        const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
+        const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
+        if (tiles[ny]?.[nx]?.passable) {
+          npc.position = { x: nx, y: ny };
+        }
+      }
+      npc.currentTask = 'играет';
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Проверка спавна NPC
+  // ----------------------------------------------------------
+  private _checkNPCSpawn(): void {
+    const char = this._world.character;
+    const npcs = this._world.npcs;
+
+    // Работники появляются когда homeLevel >= 3 и нет работников
+    const workers = npcs.filter(n => n.role === 'worker');
+    if (char.homeLevel >= 3 && workers.length < Math.min(char.homeLevel - 1, 5)) {
+      // Шанс появления работника
+      if (Math.random() < 0.3) {
+        const npc = createNPC('worker');
+        this._world.addNPC(npc);
+        this._world.addEvent('npc', `👷 К ${char.name} пришёл работник — ${npc.name}!`);
+        this._callbacks.onNewEvent();
+        this._callbacks.onNPCUpdate();
+      }
+    }
+
+    // Спутница появляется когда homeLevel >= 4 и нет спутницы
+    const companions = npcs.filter(n => n.role === 'companion');
+    if (char.homeLevel >= 4 && companions.length === 0) {
+      if (Math.random() < 0.2) {
+        const npc = createNPC('companion');
+        this._world.addNPC(npc);
+        this._world.addEvent('npc', `💕 На поляну пришла ${npc.name}!`);
+        this._callbacks.onNewEvent();
+        this._callbacks.onNPCUpdate();
+      }
+    }
+
+    // Ребёнок рождается если есть спутница и прошло 1000 тиков
+    if (companions.length > 0) {
+      const comp = companions[0];
+      const children = npcs.filter(n => n.role === 'child');
+      if (comp.tickAge > 1000 && children.length < 3 && comp.relationship > 70) {
+        if (Math.random() < 0.1) {
+          const child = createNPC('child', [char.name, comp.id]);
+          this._world.addNPC(child);
+          this._world.addEvent('npc', `👶 У ${char.name} и ${comp.name} родился ребёнок — ${child.name}!`);
+          char.needs.mood = Math.min(100, char.needs.mood + 30);
+          comp.relationship = Math.min(100, comp.relationship + 20);
+          this._callbacks.onNewEvent();
+          this._callbacks.onNPCUpdate();
+        }
+      }
+      // Increase companion relationship over time
+      comp.relationship = Math.min(100, comp.relationship + 0.01);
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Система изобретений
+  // ----------------------------------------------------------
+  private async _tryInvention(): Promise<void> {
+    this._inventionBusy = true;
+    try {
+      const char = this._world.character;
+      const existingNames = this._world.getInventionNames();
+      const invention = await generateInvention(char, existingNames);
+
+      if (invention) {
+        const inv: Invention = {
+          id: uuidv4(),
+          name: invention.name,
+          type: invention.type as Invention['type'],
+          description: invention.description,
+          recipe: invention.recipe,
+          effect: invention.effect,
+          inventedAtTick: this._world.tick,
+        };
+
+        this._world.addInvention(inv);
+        this._world.addEvent('invention', `💡 ${char.name} изобрёл: ${inv.name} — ${inv.description}`);
+        this._callbacks.onNewEvent();
+        this._callbacks.onInvention(inv);
+
+        // Mood boost from creativity
+        char.needs.mood = Math.min(100, char.needs.mood + 15);
+      }
+    } catch (err) {
+      console.error('[Simulation] Ошибка изобретения:', err);
+    } finally {
+      this._inventionBusy = false;
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Генерация мыслей
   // ----------------------------------------------------------
   private async _generateThought(): Promise<void> {
     this._thoughtBusy = true;
@@ -201,14 +444,14 @@ export class Simulation {
       this._callbacks.onThought(thought);
       this._callbacks.onNewEvent();
     } catch (err) {
-      console.error('[Simulation] Thought generation error:', err);
+      console.error('[Simulation] Ошибка генерации мысли:', err);
     } finally {
       this._thoughtBusy = false;
     }
   }
 
   // ----------------------------------------------------------
-  // Async intent selection
+  // Выбор намерения
   // ----------------------------------------------------------
   private async _selectNextIntent(): Promise<void> {
     this._aiThinkBusy = true;
@@ -219,14 +462,14 @@ export class Simulation {
       const intent = await selectIntent(char, available, urgent);
       this._pendingIntentAction = intent;
     } catch (err) {
-      console.error('[Simulation] Intent selection error:', err);
+      console.error('[Simulation] Ошибка выбора намерения:', err);
     } finally {
       this._aiThinkBusy = false;
     }
   }
 
   // ----------------------------------------------------------
-  // Handle player chat — called externally
+  // Чат с игроком
   // ----------------------------------------------------------
   handleChat(
     message: string,
@@ -240,12 +483,11 @@ export class Simulation {
       generateChatResponse(char, message, recentChat, recentEvents)
         .then(response => {
           onResponse(response);
-          // Small mood boost from social interaction
           char.needs.mood = Math.min(char.needs.mood + 5, 100);
           char.relationship = Math.min(char.relationship + 2, 100);
         })
         .catch(err => {
-          console.error('[Simulation] Chat response error:', err);
+          console.error('[Simulation] Ошибка ответа в чате:', err);
           onResponse('...');
         });
     });

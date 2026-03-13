@@ -34,7 +34,7 @@ export function ThoughtBubble({ thought, characterName }: Props) {
       </span>
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 10, color: '#557755', marginBottom: 3 }}>
-          {characterName}'s thoughts
+          Мысли {characterName}а
         </div>
         <div style={{
           fontSize: 12,

@@ -1,12 +1,11 @@
 import Phaser from 'phaser';
-import type { WorldState, WorldTile, CharacterState, TileType } from '../../types';
+import type { WorldState, WorldTile, CharacterState, TileType, NPCState } from '../../types';
 
 // ============================================================
-// Constants
+// Константы
 // ============================================================
 const TILE_SIZE = 32;
 
-// Tile colors
 const TILE_COLORS: Record<TileType, number> = {
   GRASS:      0x5a8c3e,
   TREE:       0x2d5a1e,
@@ -18,6 +17,9 @@ const TILE_COLORS: Record<TileType, number> = {
   CHEST:      0xd4a830,
   WALL:       0x7a6548,
   FLOOR:      0xc4a882,
+  WORKSHOP:   0x8B7355,
+  GARDEN:     0x4a9a3a,
+  FENCE:      0x9a7a4a,
 };
 
 const TILE_BORDER: Record<TileType, number> = {
@@ -31,6 +33,16 @@ const TILE_BORDER: Record<TileType, number> = {
   CHEST:      0xb08820,
   WALL:       0x5a4530,
   FLOOR:      0xb09870,
+  WORKSHOP:   0x6a5a3a,
+  GARDEN:     0x3a8a2a,
+  FENCE:      0x7a5a3a,
+};
+
+// Цвета NPC по роли
+const NPC_COLORS: Record<string, { body: number; shirt: number; hair: number }> = {
+  worker:    { body: 0xf4c898, shirt: 0x8B6914, hair: 0x5a3a1a },
+  companion: { body: 0xf8d4b0, shirt: 0xcc4466, hair: 0x4a2a0a },
+  child:     { body: 0xf8d8c0, shirt: 0x44aa66, hair: 0x8b6a3a },
 };
 
 // ============================================================
@@ -44,11 +56,11 @@ export class WorldScene extends Phaser.Scene {
   private _thoughtText!: Phaser.GameObjects.Text;
   private _nameText!: Phaser.GameObjects.Text;
   private _actionText!: Phaser.GameObjects.Text;
-  private _overlay!: Phaser.GameObjects.Rectangle;  // day/night overlay
+  private _overlay!: Phaser.GameObjects.Rectangle;
   private _worldState: WorldState | null = null;
-  private _charPos: { x: number; y: number } = { x: 0, y: 0 };
   private _isMoving = false;
   private _particles: Phaser.GameObjects.Graphics[] = [];
+  private _npcSprites: Map<string, { container: Phaser.GameObjects.Container; body: Phaser.GameObjects.Graphics; nameText: Phaser.GameObjects.Text; taskText: Phaser.GameObjects.Text }> = new Map();
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -61,14 +73,14 @@ export class WorldScene extends Phaser.Scene {
     this._buildAmbientParticles();
   }
 
-  // ----------------------------------------------------------
-  // Called from React to inject world state
-  // ----------------------------------------------------------
   loadWorldState(state: WorldState) {
     this._worldState = state;
     this._renderTiles(state.tiles);
     this._updateCharacter(state.character);
     this._updateDayOverlay(state.dayPhase, state.dayProgress);
+    if (state.npcs) {
+      this.updateNPCs(state.npcs);
+    }
   }
 
   updateCharacter(char: CharacterState) {
@@ -85,12 +97,31 @@ export class WorldScene extends Phaser.Scene {
     this._updateDayOverlay(phase as WorldState['dayPhase'], progress);
   }
 
+  updateNPCs(npcs: NPCState[]) {
+    // Удаляем спрайты отсутствующих NPC
+    for (const [id, sprite] of this._npcSprites) {
+      if (!npcs.find(n => n.id === id)) {
+        sprite.container.destroy();
+        this._npcSprites.delete(id);
+      }
+    }
+
+    // Обновляем/создаём NPC спрайты
+    for (const npc of npcs) {
+      let sprite = this._npcSprites.get(npc.id);
+      if (!sprite) {
+        sprite = this._createNPCSprite(npc);
+        this._npcSprites.set(npc.id, sprite);
+      }
+      this._updateNPCSprite(sprite, npc);
+    }
+  }
+
   // ----------------------------------------------------------
-  // Build tile grid
+  // Тайлы
   // ----------------------------------------------------------
   private _buildTileGrid() {
     if (!this._worldState) {
-      // Create placeholder graphics
       const g = this.add.graphics();
       g.fillStyle(0x5a8c3e);
       g.fillRect(0, 0, 20 * TILE_SIZE, 15 * TILE_SIZE);
@@ -100,7 +131,6 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private _renderTiles(tiles: WorldTile[][]) {
-    // Clear old graphics
     for (const row of this._tileGraphics) {
       for (const g of row) g?.destroy();
     }
@@ -130,28 +160,36 @@ export class WorldScene extends Phaser.Scene {
     const color = TILE_COLORS[tile.type] ?? 0x5a8c3e;
     const border = TILE_BORDER[tile.type] ?? 0x4a7a2e;
 
-    // Base tile
     g.fillStyle(TILE_COLORS.GRASS);
     g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
 
     switch (tile.type) {
       case 'GRASS':
-        // Subtle grass variation
         g.fillStyle(color);
         g.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        // Травинки
+        g.fillStyle(0x6a9c4e, 0.6);
+        g.fillRect(px + 5, py + 10, 2, 6);
+        g.fillRect(px + 15, py + 18, 2, 5);
+        g.fillRect(px + 24, py + 8, 2, 7);
         break;
 
       case 'TREE': {
-        // Trunk
+        // Ствол
         g.fillStyle(0x8b6914);
-        g.fillRect(px + 13, py + 18, 6, 14);
-        // Canopy
+        g.fillRect(px + 12, py + 16, 8, 16);
+        // Крона — несколько слоёв
+        g.fillStyle(0x1a5a10);
+        g.fillCircle(px + 16, py + 12, 14);
         g.fillStyle(color);
-        g.fillCircle(px + 16, py + 14, 12);
-        g.fillStyle(0x1a4a10);
-        g.fillCircle(px + 11, py + 16, 8);
-        g.fillCircle(px + 21, py + 16, 7);
-        // Resource indicator
+        g.fillCircle(px + 13, py + 10, 10);
+        g.fillStyle(0x3a7a2a);
+        g.fillCircle(px + 20, py + 14, 9);
+        g.fillStyle(0x2a6a1a);
+        g.fillCircle(px + 16, py + 8, 8);
+        // Блик
+        g.fillStyle(0x4a9a3a, 0.5);
+        g.fillCircle(px + 11, py + 7, 4);
         if (tile.resource > 0) {
           g.fillStyle(0xaa8800, 0.6);
           g.fillCircle(px + 25, py + 6, 4);
@@ -160,128 +198,169 @@ export class WorldScene extends Phaser.Scene {
       }
 
       case 'STONE': {
-        g.fillStyle(color);
-        g.fillEllipse(px + 14, py + 20, 20, 14);
-        g.fillStyle(0xaaaaaa);
-        g.fillEllipse(px + 10, py + 16, 14, 10);
-        g.fillStyle(0x666666);
-        g.fillEllipse(px + 18, py + 22, 10, 7);
+        g.fillStyle(0x999999);
+        g.fillEllipse(px + 16, py + 18, 22, 16);
+        g.fillStyle(0xbbbbbb);
+        g.fillEllipse(px + 12, py + 14, 14, 10);
+        g.fillStyle(0x777777);
+        g.fillEllipse(px + 20, py + 22, 12, 8);
+        g.fillStyle(0xdddddd, 0.4);
+        g.fillEllipse(px + 10, py + 12, 6, 4);
         break;
       }
 
       case 'BERRY_BUSH': {
+        g.fillStyle(0x2a6a1a);
+        g.fillCircle(px + 16, py + 18, 12);
         g.fillStyle(color);
-        g.fillCircle(px + 14, py + 18, 10);
-        g.fillStyle(0x2a6020);
-        g.fillCircle(px + 20, py + 16, 8);
-        // Berries
+        g.fillCircle(px + 12, py + 16, 9);
+        g.fillCircle(px + 22, py + 17, 8);
         if (tile.resource > 0) {
-          g.fillStyle(0xcc2222);
-          g.fillCircle(px + 12, py + 16, 3);
+          g.fillStyle(0xdd2222);
+          g.fillCircle(px + 10, py + 14, 3);
           g.fillCircle(px + 18, py + 20, 3);
-          g.fillCircle(px + 22, py + 15, 2);
+          g.fillCircle(px + 24, py + 14, 3);
+          g.fillCircle(px + 14, py + 22, 2);
+          g.fillCircle(px + 22, py + 10, 2);
         }
         break;
       }
 
       case 'CAMPFIRE': {
-        // Base stones
         g.fillStyle(0x888888);
-        g.fillCircle(px + 16, py + 22, 8);
-        // Fire
-        g.fillStyle(0xff8800);
-        g.fillTriangle(px + 16, py + 10, px + 10, py + 22, px + 22, py + 22);
-        g.fillStyle(0xffcc00);
-        g.fillTriangle(px + 16, py + 14, px + 13, py + 22, px + 19, py + 22);
-        g.fillStyle(0xffffff, 0.5);
-        g.fillCircle(px + 16, py + 16, 3);
+        g.fillCircle(px + 16, py + 22, 9);
+        g.fillStyle(0x666666);
+        g.fillCircle(px + 10, py + 22, 4);
+        g.fillCircle(px + 22, py + 22, 4);
+        g.fillStyle(0xff4400, 0.3);
+        g.fillCircle(px + 16, py + 16, 12);
+        g.fillStyle(0xff6600);
+        g.fillTriangle(px + 16, py + 8, px + 8, py + 22, px + 24, py + 22);
+        g.fillStyle(0xffaa00);
+        g.fillTriangle(px + 16, py + 12, px + 11, py + 22, px + 21, py + 22);
+        g.fillStyle(0xffdd00);
+        g.fillTriangle(px + 16, py + 15, px + 13, py + 22, px + 19, py + 22);
+        g.fillStyle(0xffff88, 0.8);
+        g.fillCircle(px + 12, py + 10, 1.5);
+        g.fillCircle(px + 20, py + 8, 1);
         break;
       }
 
       case 'BED': {
-        // Frame
         g.fillStyle(0x8b6040);
-        g.fillRect(px + 3, py + 6, 26, 20);
-        // Mattress
+        g.fillRect(px + 2, py + 5, 28, 22);
         g.fillStyle(0xe8d8c0);
-        g.fillRect(px + 5, py + 8, 22, 16);
-        // Pillow
+        g.fillRect(px + 4, py + 7, 24, 18);
         g.fillStyle(0xffffff);
-        g.fillRect(px + 6, py + 9, 10, 8);
-        // Blanket
-        g.fillStyle(0x6688cc);
-        g.fillRect(px + 6, py + 17, 20, 6);
+        g.fillRect(px + 5, py + 8, 10, 8);
+        g.fillStyle(0x5577bb);
+        g.fillRect(px + 5, py + 16, 22, 8);
+        g.fillStyle(0xddddcc);
+        g.fillRect(px + 5, py + 14, 10, 2);
         break;
       }
 
       case 'CHEST': {
-        // Body
         g.fillStyle(color);
-        g.fillRect(px + 4, py + 12, 24, 16);
-        // Lid
+        g.fillRect(px + 3, py + 11, 26, 17);
         g.fillStyle(0xe8b840);
-        g.fillRect(px + 4, py + 8, 24, 6);
-        // Lock
-        g.fillStyle(0x888800);
-        g.fillRect(px + 13, py + 15, 6, 5);
-        g.fillStyle(0xcccc00);
-        g.fillCircle(px + 16, py + 16, 3);
-        // Border
+        g.fillRect(px + 3, py + 7, 26, 6);
+        g.fillStyle(0x886600);
+        g.fillRect(px + 3, py + 13, 26, 2);
+        g.fillStyle(0xccaa00);
+        g.fillCircle(px + 16, py + 18, 3);
+        g.fillStyle(0xffdd44);
+        g.fillCircle(px + 16, py + 18, 1.5);
         g.lineStyle(1, border);
-        g.strokeRect(px + 4, py + 8, 24, 20);
+        g.strokeRect(px + 3, py + 7, 26, 21);
         break;
       }
 
       case 'WALL': {
         g.fillStyle(color);
         g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        // Stone texture
         g.fillStyle(0x8a7458);
-        g.fillRect(px + 2, py + 2, 12, 8);
-        g.fillRect(px + 18, py + 2, 10, 8);
-        g.fillRect(px + 8, py + 12, 14, 8);
-        g.fillRect(px + 2, py + 22, 10, 8);
-        g.fillRect(px + 20, py + 22, 8, 8);
+        g.fillRect(px + 1, py + 1, 13, 9);
+        g.fillRect(px + 17, py + 1, 12, 9);
+        g.fillRect(px + 7, py + 12, 15, 9);
+        g.fillRect(px + 1, py + 23, 11, 8);
+        g.fillRect(px + 19, py + 23, 10, 8);
+        g.lineStyle(1, 0x5a4530, 0.5);
+        g.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
         break;
       }
 
       case 'FLOOR': {
         g.fillStyle(color);
         g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        // Wood grain
-        g.lineStyle(1, 0xb09070, 0.4);
-        g.beginPath();
-        g.moveTo(px + 4, py);
-        g.lineTo(px + 4, py + TILE_SIZE);
-        g.strokePath();
-        g.beginPath();
-        g.moveTo(px + 12, py);
-        g.lineTo(px + 12, py + TILE_SIZE);
-        g.strokePath();
-        g.beginPath();
-        g.moveTo(px + 20, py);
-        g.lineTo(px + 20, py + TILE_SIZE);
-        g.strokePath();
-        g.beginPath();
-        g.moveTo(px + 28, py);
-        g.lineTo(px + 28, py + TILE_SIZE);
-        g.strokePath();
+        g.lineStyle(1, 0xb09070, 0.3);
+        for (let i = 4; i < TILE_SIZE; i += 8) {
+          g.beginPath();
+          g.moveTo(px + i, py);
+          g.lineTo(px + i, py + TILE_SIZE);
+          g.strokePath();
+        }
         break;
       }
 
       case 'WATER': {
         g.fillStyle(color);
         g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        g.fillStyle(0x5a9ace, 0.5);
-        g.fillRect(px + 2, py + 8, 28, 6);
-        g.fillRect(px + 2, py + 20, 28, 6);
+        g.fillStyle(0x5a9ace, 0.4);
+        g.fillRect(px + 2, py + 6, 28, 5);
+        g.fillRect(px + 4, py + 18, 24, 5);
+        g.fillStyle(0x88bbee, 0.3);
+        g.fillRect(px + 8, py + 12, 16, 3);
+        break;
+      }
+
+      case 'WORKSHOP': {
+        g.fillStyle(color);
+        g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+        // Наковальня
+        g.fillStyle(0x555555);
+        g.fillRect(px + 8, py + 14, 16, 4);
+        g.fillRect(px + 12, py + 12, 8, 8);
+        // Молоток
+        g.fillStyle(0x8b6914);
+        g.fillRect(px + 22, py + 6, 3, 12);
+        g.fillStyle(0x888888);
+        g.fillRect(px + 20, py + 4, 7, 4);
+        break;
+      }
+
+      case 'GARDEN': {
+        g.fillStyle(0x4a7a2a);
+        g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+        g.fillStyle(0x2a5a1a);
+        for (let i = 0; i < 4; i++) {
+          g.fillRect(px + 2, py + 4 + i * 8, 28, 3);
+        }
+        g.fillStyle(0x66aa44);
+        for (let i = 0; i < 4; i++) {
+          g.fillCircle(px + 8, py + 5 + i * 8, 3);
+          g.fillCircle(px + 16, py + 5 + i * 8, 3);
+          g.fillCircle(px + 24, py + 5 + i * 8, 3);
+        }
+        break;
+      }
+
+      case 'FENCE': {
+        g.fillStyle(TILE_COLORS.GRASS);
+        g.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+        g.fillStyle(color);
+        g.fillRect(px + 2, py + 10, 28, 4);
+        g.fillRect(px + 2, py + 20, 28, 4);
+        g.fillRect(px + 4, py + 4, 4, 24);
+        g.fillRect(px + 14, py + 4, 4, 24);
+        g.fillRect(px + 24, py + 4, 4, 24);
         break;
       }
     }
   }
 
   // ----------------------------------------------------------
-  // Build character sprite
+  // Спрайт персонажа — улучшенный
   // ----------------------------------------------------------
   private _buildCharacter() {
     this._characterSprite = this.add.container(0, 0);
@@ -291,8 +370,7 @@ export class WorldScene extends Phaser.Scene {
     this._drawCharacterBody(this._characterBody, false);
     this._characterSprite.add(this._characterBody);
 
-    // Name tag
-    this._nameText = this.add.text(0, -30, 'Alder', {
+    this._nameText = this.add.text(0, -34, 'Олдер', {
       fontSize: '10px',
       color: '#ffffff',
       backgroundColor: '#00000088',
@@ -301,8 +379,7 @@ export class WorldScene extends Phaser.Scene {
     this._nameText.setOrigin(0.5, 1);
     this._characterSprite.add(this._nameText);
 
-    // Action label
-    this._actionText = this.add.text(0, -18, '', {
+    this._actionText = this.add.text(0, -22, '', {
       fontSize: '9px',
       color: '#ffffaa',
       backgroundColor: '#00000066',
@@ -311,10 +388,8 @@ export class WorldScene extends Phaser.Scene {
     this._actionText.setOrigin(0.5, 1);
     this._characterSprite.add(this._actionText);
 
-    // Thought bubble (hidden initially)
     this._buildThoughtBubble();
 
-    // Default position
     this._characterSprite.setPosition(
       10 * TILE_SIZE + TILE_SIZE / 2,
       11 * TILE_SIZE + TILE_SIZE / 2
@@ -324,40 +399,186 @@ export class WorldScene extends Phaser.Scene {
   private _drawCharacterBody(g: Phaser.GameObjects.Graphics, isMoving: boolean) {
     g.clear();
     const bounce = isMoving ? Math.sin(Date.now() / 150) * 2 : 0;
+    const legSwing = isMoving ? Math.sin(Date.now() / 120) * 3 : 0;
 
-    // Shadow
-    g.fillStyle(0x000000, 0.25);
-    g.fillEllipse(0, 10, 18, 6);
+    // Тень
+    g.fillStyle(0x000000, 0.3);
+    g.fillEllipse(0, 14, 20, 6);
 
-    // Body
-    g.fillStyle(0x4488cc);
-    g.fillRect(-6, -2 + bounce, 12, 14);
+    // Обувь
+    g.fillStyle(0x5a3a1a);
+    g.fillEllipse(-4, 18 + bounce + legSwing, 7, 4);
+    g.fillEllipse(4, 18 + bounce - legSwing, 7, 4);
 
-    // Head
-    g.fillStyle(0xf4c898);
-    g.fillCircle(0, -9 + bounce, 8);
-
-    // Eyes
-    g.fillStyle(0x333333);
-    g.fillCircle(-3, -10 + bounce, 1.5);
-    g.fillCircle(3, -10 + bounce, 1.5);
-
-    // Hair
-    g.fillStyle(0x8b5e2a);
-    g.fillRect(-8, -17 + bounce, 16, 8);
-    g.fillCircle(0, -17 + bounce, 8);
-
-    // Legs
+    // Ноги (штаны)
     g.fillStyle(0x336688);
-    g.fillRect(-6, 12 + bounce, 5, 8);
-    g.fillRect(1, 12 + (isMoving ? -bounce : bounce), 5, 8);
+    g.fillRect(-6, 8 + bounce, 5, 10 + legSwing * 0.3);
+    g.fillRect(1, 8 + bounce, 5, 10 - legSwing * 0.3);
 
-    // Feet
-    g.fillStyle(0x886633);
-    g.fillEllipse(-4, 20 + bounce, 6, 4);
-    g.fillEllipse(4, 20 + (isMoving ? -bounce : bounce), 6, 4);
+    // Тело (рубашка)
+    g.fillStyle(0x4488cc);
+    g.fillRect(-7, -4 + bounce, 14, 14);
+    // Воротник
+    g.fillStyle(0x5599dd);
+    g.fillRect(-5, -4 + bounce, 10, 3);
+
+    // Руки
+    g.fillStyle(0xf4c898);
+    g.fillRect(-9, -1 + bounce, 3, 10);
+    g.fillRect(6, -1 + bounce, 3, 10);
+    // Рукава
+    g.fillStyle(0x4488cc);
+    g.fillRect(-9, -1 + bounce, 3, 4);
+    g.fillRect(6, -1 + bounce, 3, 4);
+
+    // Голова
+    g.fillStyle(0xf4c898);
+    g.fillCircle(0, -11 + bounce, 9);
+
+    // Глаза
+    g.fillStyle(0x333333);
+    g.fillCircle(-3, -12 + bounce, 2);
+    g.fillCircle(3, -12 + bounce, 2);
+    // Зрачки
+    g.fillStyle(0x111111);
+    g.fillCircle(-3, -12 + bounce, 1);
+    g.fillCircle(3, -12 + bounce, 1);
+    // Блики в глазах
+    g.fillStyle(0xffffff, 0.7);
+    g.fillCircle(-3.5, -12.5 + bounce, 0.5);
+    g.fillCircle(2.5, -12.5 + bounce, 0.5);
+
+    // Брови
+    g.fillStyle(0x6b4a2a);
+    g.fillRect(-5, -15 + bounce, 4, 1);
+    g.fillRect(1, -15 + bounce, 4, 1);
+
+    // Рот
+    g.fillStyle(0xcc8866);
+    g.fillEllipse(0, -7 + bounce, 3, 1.5);
+
+    // Волосы — пышные
+    g.fillStyle(0x8b5e2a);
+    g.fillCircle(0, -18 + bounce, 9);
+    g.fillRect(-9, -20 + bounce, 18, 8);
+    // Боковые волосы
+    g.fillStyle(0x7a4e1a);
+    g.fillRect(-9, -16 + bounce, 3, 6);
+    g.fillRect(6, -16 + bounce, 3, 6);
+
+    // Ремень
+    g.fillStyle(0x6b4a1a);
+    g.fillRect(-7, 7 + bounce, 14, 2);
+    g.fillStyle(0xccaa44);
+    g.fillRect(-1, 7 + bounce, 2, 2);
   }
 
+  // ----------------------------------------------------------
+  // NPC спрайты
+  // ----------------------------------------------------------
+  private _createNPCSprite(npc: NPCState): { container: Phaser.GameObjects.Container; body: Phaser.GameObjects.Graphics; nameText: Phaser.GameObjects.Text; taskText: Phaser.GameObjects.Text } {
+    const container = this.add.container(
+      npc.position.x * TILE_SIZE + TILE_SIZE / 2,
+      npc.position.y * TILE_SIZE + TILE_SIZE / 2
+    );
+    container.setDepth(9);
+
+    const body = this.add.graphics();
+    this._drawNPCBody(body, npc.role);
+    container.add(body);
+
+    const roleEmoji = npc.role === 'worker' ? '⛏' : npc.role === 'companion' ? '♥' : '★';
+    const nameText = this.add.text(0, -30, `${roleEmoji} ${npc.name}`, {
+      fontSize: '9px',
+      color: '#ffffff',
+      backgroundColor: '#00000088',
+      padding: { x: 3, y: 1 },
+    });
+    nameText.setOrigin(0.5, 1);
+    container.add(nameText);
+
+    const taskText = this.add.text(0, -19, npc.currentTask || '', {
+      fontSize: '8px',
+      color: '#aaffaa',
+      backgroundColor: '#00000066',
+      padding: { x: 2, y: 1 },
+    });
+    taskText.setOrigin(0.5, 1);
+    container.add(taskText);
+
+    return { container, body, nameText, taskText };
+  }
+
+  private _drawNPCBody(g: Phaser.GameObjects.Graphics, role: string) {
+    g.clear();
+    const colors = NPC_COLORS[role] || NPC_COLORS.worker;
+    const s = role === 'child' ? 0.7 : 1;
+
+    // Тень
+    g.fillStyle(0x000000, 0.2);
+    g.fillEllipse(0, 12 * s, 16 * s, 5 * s);
+
+    // Обувь
+    g.fillStyle(0x5a3a1a);
+    g.fillEllipse(-3 * s, 16 * s, 5 * s, 3 * s);
+    g.fillEllipse(3 * s, 16 * s, 5 * s, 3 * s);
+
+    // Ноги
+    g.fillStyle(0x556655);
+    g.fillRect(-5 * s, 6 * s, 4 * s, 10 * s);
+    g.fillRect(1 * s, 6 * s, 4 * s, 10 * s);
+
+    // Тело
+    g.fillStyle(colors.shirt);
+    g.fillRect(-6 * s, -4 * s, 12 * s, 12 * s);
+
+    // Руки
+    g.fillStyle(colors.body);
+    g.fillRect(-8 * s, -2 * s, 3 * s, 8 * s);
+    g.fillRect(5 * s, -2 * s, 3 * s, 8 * s);
+
+    // Голова
+    g.fillStyle(colors.body);
+    g.fillCircle(0, -10 * s, 8 * s);
+
+    // Глаза
+    g.fillStyle(0x333333);
+    g.fillCircle(-2.5 * s, -11 * s, 1.5 * s);
+    g.fillCircle(2.5 * s, -11 * s, 1.5 * s);
+
+    // Волосы
+    g.fillStyle(colors.hair);
+    g.fillCircle(0, -16 * s, 8 * s);
+    g.fillRect(-8 * s, -18 * s, 16 * s, 7 * s);
+
+    // Длинные волосы для companion
+    if (role === 'companion') {
+      g.fillRect(-8 * s, -14 * s, 3 * s, 14 * s);
+      g.fillRect(5 * s, -14 * s, 3 * s, 14 * s);
+    }
+  }
+
+  private _updateNPCSprite(sprite: { container: Phaser.GameObjects.Container; body: Phaser.GameObjects.Graphics; nameText: Phaser.GameObjects.Text; taskText: Phaser.GameObjects.Text }, npc: NPCState) {
+    const targetX = npc.position.x * TILE_SIZE + TILE_SIZE / 2;
+    const targetY = npc.position.y * TILE_SIZE + TILE_SIZE / 2;
+
+    if (Math.abs(targetX - sprite.container.x) > 1 || Math.abs(targetY - sprite.container.y) > 1) {
+      this.tweens.killTweensOf(sprite.container);
+      this.tweens.add({
+        targets: sprite.container,
+        x: targetX,
+        y: targetY,
+        duration: 600,
+        ease: 'Linear',
+      });
+    }
+
+    sprite.taskText.setText(npc.currentTask || '');
+  }
+
+  // ----------------------------------------------------------
+  // Облачко мыслей
+  // ----------------------------------------------------------
   private _buildThoughtBubble() {
     this._thoughtBubble = this.add.container(0, 0);
     this._thoughtBubble.setDepth(20);
@@ -368,7 +589,6 @@ export class WorldScene extends Phaser.Scene {
     bg.fillRoundedRect(-80, -70, 160, 50, 10);
     bg.lineStyle(2, 0xaaaaaa);
     bg.strokeRoundedRect(-80, -70, 160, 50, 10);
-    // Bubble tail
     bg.fillStyle(0xffffff, 0.92);
     bg.fillCircle(-20, -22, 5);
     bg.fillCircle(-12, -14, 3);
@@ -393,19 +613,17 @@ export class WorldScene extends Phaser.Scene {
     this._thoughtText.setText(truncated);
     this._thoughtBubble.setVisible(true);
 
-    // Position near character
     const cx = this._characterSprite.x;
     const cy = this._characterSprite.y;
     this._thoughtBubble.setPosition(cx + 20, cy - 20);
 
-    // Auto-hide after 6 seconds
     this.time.delayedCall(6000, () => {
       this._thoughtBubble.setVisible(false);
     });
   }
 
   // ----------------------------------------------------------
-  // Update character position with smooth movement
+  // Обновление позиции персонажа
   // ----------------------------------------------------------
   private _updateCharacter(char: CharacterState) {
     const targetX = char.position.x * TILE_SIZE + TILE_SIZE / 2;
@@ -427,7 +645,6 @@ export class WorldScene extends Phaser.Scene {
         onComplete: () => { this._isMoving = false; },
       });
 
-      // Flip sprite based on direction
       if (targetX < curX) {
         this._characterSprite.setScale(-1, 1);
       } else {
@@ -435,10 +652,8 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Update action label
     this._actionText.setText(char.currentIntentLabel || '');
 
-    // Update thought bubble position if visible
     if (this._thoughtBubble.visible) {
       this._thoughtBubble.setPosition(
         this._characterSprite.x + 20,
@@ -448,7 +663,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   // ----------------------------------------------------------
-  // Day/night overlay
+  // День/ночь
   // ----------------------------------------------------------
   private _buildDayOverlay() {
     const { width, height } = this.cameras.main;
@@ -481,7 +696,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   // ----------------------------------------------------------
-  // Ambient floating particles (fireflies at night, dust in day)
+  // Атмосферные частицы
   // ----------------------------------------------------------
   private _buildAmbientParticles() {
     for (let i = 0; i < 8; i++) {

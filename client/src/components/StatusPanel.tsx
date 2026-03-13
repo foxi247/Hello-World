@@ -56,24 +56,31 @@ const DAY_ICONS: Record<string, string> = {
   night: '🌙',
 };
 
+const DAY_LABELS: Record<string, string> = {
+  dawn: 'рассвет',
+  day:  'день',
+  dusk: 'закат',
+  night: 'ночь',
+};
+
 export function StatusPanel({ character, dayPhase, tick }: Props) {
   if (!character) {
     return (
       <div style={panelStyle}>
-        <div style={{ color: '#666', fontSize: 12 }}>Loading...</div>
+        <div style={{ color: '#666', fontSize: 12 }}>Загрузка...</div>
       </div>
     );
   }
 
   const day = Math.floor(tick / 400) + 1;
-  const timeLabel = `Day ${day} · ${DAY_ICONS[dayPhase] ?? '?'} ${dayPhase}`;
+  const timeLabel = `День ${day} · ${DAY_ICONS[dayPhase] ?? '?'} ${DAY_LABELS[dayPhase] ?? dayPhase}`;
 
   const inv = character.inventory;
   const wood  = inv.find(i => i.type === 'wood')?.amount  ?? 0;
   const stone = inv.find(i => i.type === 'stone')?.amount ?? 0;
   const food  = inv.find(i => i.type === 'food')?.amount  ?? 0;
 
-  const homeLabels = ['No shelter', 'Has campfire', 'Simple shelter', 'Cozy hut'];
+  const homeLabels = ['Нет укрытия', 'Костёр', 'Укрытие', 'Хижина', 'Дом', 'Мастерская'];
 
   return (
     <div style={panelStyle}>
@@ -85,21 +92,21 @@ export function StatusPanel({ character, dayPhase, tick }: Props) {
           {timeLabel}
         </div>
         <div style={{ fontSize: 10, color: '#667788', marginTop: 1 }}>
-          {homeLabels[character.homeLevel] ?? 'Home'}
+          🏠 {homeLabels[character.homeLevel] ?? 'Дом'}
         </div>
       </div>
 
-      <NeedBar label="Hunger"  value={character.needs.hunger}  color="#e8a030" icon="🍞" />
-      <NeedBar label="Energy"  value={character.needs.energy}  color="#4488ee" icon="⚡" />
-      <NeedBar label="Mood"    value={character.needs.mood}    color="#cc88ee" icon="😊" />
-      <NeedBar label="Comfort" value={character.needs.comfort} color="#44bb88" icon="🏠" />
+      <NeedBar label="Голод"    value={character.needs.hunger}  color="#e8a030" icon="🍞" />
+      <NeedBar label="Энергия"  value={character.needs.energy}  color="#4488ee" icon="⚡" />
+      <NeedBar label="Настроение" value={character.needs.mood}  color="#cc88ee" icon="😊" />
+      <NeedBar label="Комфорт"  value={character.needs.comfort} color="#44bb88" icon="🏠" />
 
       <div style={{ borderTop: '1px solid #333', paddingTop: 8, marginTop: 8 }}>
-        <div style={{ fontSize: 10, color: '#aaa', marginBottom: 5 }}>Inventory</div>
+        <div style={{ fontSize: 10, color: '#aaa', marginBottom: 5 }}>Инвентарь</div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <InventoryBadge icon="🪵" amount={wood}  label="Wood" />
-          <InventoryBadge icon="🪨" amount={stone} label="Stone" />
-          <InventoryBadge icon="🫐" amount={food}  label="Food" />
+          <InventoryBadge icon="🪵" amount={wood}  label="Дерево" />
+          <InventoryBadge icon="🪨" amount={stone} label="Камень" />
+          <InventoryBadge icon="🫐" amount={food}  label="Еда" />
         </div>
       </div>
 

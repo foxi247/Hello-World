@@ -61,7 +61,7 @@ export function Chat({ messages, connected, onSend }: Props) {
         flexShrink: 0,
       }}>
         <span style={{ fontSize: 12, color: '#88cc88', fontWeight: 'bold' }}>
-          💬 Speak to Alder
+          💬 Говорить с Олдером
         </span>
         <span style={{
           marginLeft: 'auto',
@@ -73,7 +73,7 @@ export function Chat({ messages, connected, onSend }: Props) {
           boxShadow: connected ? '0 0 6px #44cc44' : 'none',
         }} />
         <span style={{ fontSize: 10, color: connected ? '#44cc44' : '#cc4444' }}>
-          {connected ? 'connected' : 'connecting...'}
+          {connected ? 'подключён' : 'подключение...'}
         </span>
       </div>
 
@@ -94,8 +94,8 @@ export function Chat({ messages, connected, onSend }: Props) {
             marginTop: 20,
             lineHeight: 1.6,
           }}>
-            Alder is going about his day.<br />
-            Say something to get his attention.
+            Олдер занят своими делами.<br />
+            Скажи что-нибудь, чтобы привлечь его внимание.
           </div>
         )}
 
@@ -118,7 +118,7 @@ export function Chat({ messages, connected, onSend }: Props) {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Say something..."
+          placeholder="Скажи что-нибудь..."
           disabled={!connected}
           rows={2}
           style={{
@@ -172,7 +172,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         paddingLeft: isUser ? 0 : 4,
         paddingRight: isUser ? 4 : 0,
       }}>
-        {isUser ? 'You' : 'Alder'} · {time}
+        {isUser ? 'Ты' : 'Олдер'} · {time}
       </div>
       <div style={{
         maxWidth: '85%',

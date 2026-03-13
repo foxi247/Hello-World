@@ -1,9 +1,8 @@
-import type { CharacterState, WorldTile, ActionType, WorldState } from '../../../shared/types';
+import type { CharacterState, WorldTile, ActionType } from '../../../shared/types';
 import {
   addToInventory,
   eatFood,
   applyBuild,
-  isNearHome,
   getInventoryAmount,
 } from './character';
 import {
@@ -15,16 +14,16 @@ import {
 } from './worldMap';
 
 // ============================================================
-// Result of executing one action step
+// Результат выполнения одного шага действия
 // ============================================================
 export interface ActionResult {
-  completed: boolean;       // true = action done, pick new one
-  eventMessage?: string;    // message to broadcast
-  tileChanged?: WorldTile;  // if a tile was modified
+  completed: boolean;
+  eventMessage?: string;
+  tileChanged?: WorldTile;
 }
 
 // ============================================================
-// Start a new action — sets up target, returns initial event
+// Начать новое действие (РУССКИЙ)
 // ============================================================
 export function startAction(
   char: CharacterState,
@@ -37,66 +36,80 @@ export function startAction(
   switch (action) {
     case 'WANDER': {
       char.targetPosition = randomPassableTile(tiles, char.position);
-      char.currentIntentLabel = 'wandering around';
-      return { eventMessage: 'Alder starts wandering.' };
+      char.currentIntentLabel = 'гуляет';
+      return { eventMessage: `${char.name} решил прогуляться.` };
     }
     case 'COLLECT_WOOD': {
       const trees = findTilesOfType(tiles, 'TREE', char.position);
       const adj = trees.map(t => findAdjacentPassable(tiles, t)).find(Boolean);
       char.targetPosition = adj ?? char.position;
-      char.currentIntentLabel = 'looking for wood';
-      return { eventMessage: 'Alder heads toward the trees.' };
+      char.currentIntentLabel = 'ищет дерево';
+      return { eventMessage: `${char.name} направился к деревьям.` };
     }
     case 'COLLECT_STONE': {
       const stones = findTilesOfType(tiles, 'STONE', char.position);
       const adj = stones.map(t => findAdjacentPassable(tiles, t)).find(Boolean);
       char.targetPosition = adj ?? char.position;
-      char.currentIntentLabel = 'searching for stone';
-      return { eventMessage: 'Alder looks for stones to gather.' };
+      char.currentIntentLabel = 'ищет камни';
+      return { eventMessage: `${char.name} ищет камни.` };
     }
     case 'COLLECT_FOOD': {
       const bushes = findTilesOfType(tiles, 'BERRY_BUSH', char.position);
       const adj = bushes.map(t => findAdjacentPassable(tiles, t)).find(Boolean);
       char.targetPosition = adj ?? char.position;
-      char.currentIntentLabel = 'foraging for berries';
-      return { eventMessage: 'Alder heads to the berry bushes.' };
+      char.currentIntentLabel = 'собирает ягоды';
+      return { eventMessage: `${char.name} пошёл за ягодами.` };
     }
     case 'EAT': {
       char.targetPosition = { ...HOME_TILES.campfire };
-      char.currentIntentLabel = 'eating';
-      return { eventMessage: 'Alder decides to eat something.' };
+      char.currentIntentLabel = 'ест';
+      return { eventMessage: `${char.name} решил поесть.` };
     }
     case 'REST': {
       char.targetPosition = { ...HOME_TILES.bed };
-      char.currentIntentLabel = 'resting';
-      return { eventMessage: 'Alder heads to rest.' };
+      char.currentIntentLabel = 'отдыхает';
+      return { eventMessage: `${char.name} пошёл отдыхать.` };
     }
     case 'BUILD': {
       char.targetPosition = { ...HOME_TILES.chest };
-      char.currentIntentLabel = 'building';
-      return { eventMessage: 'Alder prepares to build something.' };
+      char.currentIntentLabel = 'строит';
+      return { eventMessage: `${char.name} готовится строить.` };
     }
     case 'THINK': {
       char.targetPosition = null;
-      char.currentIntentLabel = 'thinking';
-      return { eventMessage: 'Alder pauses, deep in thought.' };
+      char.currentIntentLabel = 'думает';
+      return { eventMessage: `${char.name} задумался.` };
+    }
+    case 'INVENT': {
+      char.targetPosition = null;
+      char.currentIntentLabel = 'изобретает';
+      return { eventMessage: `${char.name} размышляет о новом изобретении...` };
+    }
+    case 'CRAFT': {
+      char.targetPosition = { ...HOME_TILES.chest };
+      char.currentIntentLabel = 'мастерит';
+      return { eventMessage: `${char.name} начал мастерить.` };
+    }
+    case 'MANAGE_NPC': {
+      char.targetPosition = null;
+      char.currentIntentLabel = 'управляет';
+      return { eventMessage: `${char.name} раздаёт указания.` };
     }
     default: {
       char.targetPosition = null;
-      char.currentIntentLabel = 'idling';
-      return { eventMessage: 'Alder stands still.' };
+      char.currentIntentLabel = 'стоит';
+      return { eventMessage: `${char.name} стоит на месте.` };
     }
   }
 }
 
 // ============================================================
-// Progress an in-flight action each tick
+// Продвижение действия каждый тик
 // ============================================================
 export function progressAction(
   char: CharacterState,
   tiles: WorldTile[][]
 ): ActionResult {
-  // Move toward target if we have one
   if (char.targetPosition) {
     const dx = char.targetPosition.x - char.position.x;
     const dy = char.targetPosition.y - char.position.y;
@@ -105,20 +118,18 @@ export function progressAction(
     if (dist > 0) {
       const moved = stepToward(char, tiles);
       if (!moved) {
-        // BFS found no path — give up and pick a new action
-        return { completed: true, eventMessage: 'The path is blocked.' };
+        return { completed: true, eventMessage: 'Путь заблокирован.' };
       }
       char.actionProgress = Math.min(char.actionProgress + 5, 95);
       return { completed: false };
     }
   }
 
-  // At target — do the action
   return executeAtTarget(char, tiles);
 }
 
 // ============================================================
-// Execute action at the destination
+// Выполнение действия на месте
 // ============================================================
 function executeAtTarget(
   char: CharacterState,
@@ -126,7 +137,7 @@ function executeAtTarget(
 ): ActionResult {
   switch (char.currentAction) {
     case 'WANDER':
-      return { completed: true, eventMessage: 'Alder had a look around.' };
+      return { completed: true, eventMessage: `${char.name} осмотрелся.` };
 
     case 'COLLECT_WOOD': {
       const tree = findAdjacentResource(tiles, char.position, 'TREE');
@@ -137,11 +148,11 @@ function executeAtTarget(
         if (tree.resource <= 0) tree.type = 'GRASS' as any, tree.passable = true;
         return {
           completed: true,
-          eventMessage: `Alder collected ${gained} wood. (total: ${getInventoryAmount(char, 'wood')})`,
+          eventMessage: `${char.name} нарубил ${gained} дерева. (всего: ${getInventoryAmount(char, 'wood')})`,
           tileChanged: tree,
         };
       }
-      return { completed: true, eventMessage: 'No wood nearby to collect.' };
+      return { completed: true, eventMessage: 'Рядом нет деревьев.' };
     }
 
     case 'COLLECT_STONE': {
@@ -153,11 +164,11 @@ function executeAtTarget(
         if (stone.resource <= 0) stone.type = 'GRASS' as any, stone.passable = true;
         return {
           completed: true,
-          eventMessage: `Alder collected ${gained} stone. (total: ${getInventoryAmount(char, 'stone')})`,
+          eventMessage: `${char.name} собрал ${gained} камня. (всего: ${getInventoryAmount(char, 'stone')})`,
           tileChanged: stone,
         };
       }
-      return { completed: true, eventMessage: 'No stone nearby to collect.' };
+      return { completed: true, eventMessage: 'Рядом нет камней.' };
     }
 
     case 'COLLECT_FOOD': {
@@ -169,11 +180,11 @@ function executeAtTarget(
         if (bush.resource <= 0) bush.type = 'GRASS' as any, bush.passable = true;
         return {
           completed: true,
-          eventMessage: `Alder picked ${gained} berries. (total: ${getInventoryAmount(char, 'food')})`,
+          eventMessage: `${char.name} собрал ${gained} ягод. (всего: ${getInventoryAmount(char, 'food')})`,
           tileChanged: bush,
         };
       }
-      return { completed: true, eventMessage: 'No berries nearby.' };
+      return { completed: true, eventMessage: 'Ягод поблизости нет.' };
     }
 
     case 'EAT': {
@@ -181,18 +192,17 @@ function executeAtTarget(
       return {
         completed: true,
         eventMessage: ate
-          ? `Alder ate some food. Hunger: ${Math.round(char.needs.hunger)}`
-          : 'No food to eat!',
+          ? `${char.name} поел. Голод: ${Math.round(char.needs.hunger)}`
+          : 'Нечего есть!',
       };
     }
 
     case 'REST': {
-      // REST is a multi-tick action — we handle it in the loop
       char.actionProgress += 10;
       if (char.actionProgress >= 100) {
         return {
           completed: true,
-          eventMessage: `Alder finished resting. Energy: ${Math.round(char.needs.energy)}`,
+          eventMessage: `${char.name} отдохнул. Энергия: ${Math.round(char.needs.energy)}`,
         };
       }
       return { completed: false };
@@ -200,16 +210,37 @@ function executeAtTarget(
 
     case 'BUILD': {
       const msg = applyBuild(char);
-      return {
-        completed: true,
-        eventMessage: msg,
-      };
+      return { completed: true, eventMessage: msg };
     }
 
     case 'THINK': {
       char.actionProgress += 20;
       if (char.actionProgress >= 100) {
-        return { completed: true, eventMessage: 'Alder finishes pondering.' };
+        return { completed: true, eventMessage: `${char.name} закончил размышлять.` };
+      }
+      return { completed: false };
+    }
+
+    case 'INVENT': {
+      char.actionProgress += 10;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} закончил думать над изобретением.` };
+      }
+      return { completed: false };
+    }
+
+    case 'CRAFT': {
+      char.actionProgress += 15;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} закончил мастерить.` };
+      }
+      return { completed: false };
+    }
+
+    case 'MANAGE_NPC': {
+      char.actionProgress += 25;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} раздал указания.` };
       }
       return { completed: false };
     }
@@ -220,11 +251,10 @@ function executeAtTarget(
 }
 
 // ============================================================
-// Move one step toward target using BFS to navigate around walls
+// Передвижение через BFS
 // ============================================================
 function stepToward(char: CharacterState, tiles: WorldTile[][]): boolean {
   if (!char.targetPosition) return false;
-
   const next = bfsNextStep(tiles, char.position, char.targetPosition);
   if (next) {
     char.position = next;
@@ -264,7 +294,6 @@ function bfsNextStep(
       parent.set(key, cur);
 
       if (nx === end.x && ny === end.y) {
-        // Trace back to find the first step from start
         let node = { x: nx, y: ny };
         while (true) {
           const p = parent.get(`${node.x},${node.y}`)!;
@@ -277,11 +306,11 @@ function bfsNextStep(
     }
   }
 
-  return null; // no path found
+  return null;
 }
 
 // ============================================================
-// Find a resource tile adjacent to position
+// Поиск ресурса рядом
 // ============================================================
 function findAdjacentResource(
   tiles: WorldTile[][],
@@ -304,7 +333,6 @@ function findAdjacentResource(
     }
   }
 
-  // Also check same tile (for beds/campfire)
   const cur = tiles[pos.y]?.[pos.x];
   if (cur?.type === type) return cur;
 
@@ -312,7 +340,7 @@ function findAdjacentResource(
 }
 
 // ============================================================
-// Random passable tile for wandering
+// Случайный проходимый тайл для прогулки
 // ============================================================
 function randomPassableTile(
   tiles: WorldTile[][],

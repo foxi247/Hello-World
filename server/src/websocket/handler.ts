@@ -78,14 +78,14 @@ export class WSHandler {
         // Add user message
         const userMsg = this._world.addChatMessage('user', text);
         this._broadcast({ type: 'CHAT_RESPONSE', payload: userMsg });
-        this._world.addEvent('chat_in', `You: ${text}`);
+        this._world.addEvent('chat_in', `Ты: ${text}`);
         this._broadcastNewEvents();
 
         // Generate character response
         this._simulation.handleChat(text, (response) => {
           const charMsg = this._world.addChatMessage('character', response);
           this._broadcast({ type: 'CHAT_RESPONSE', payload: charMsg });
-          this._world.addEvent('chat_out', `Alder: ${response}`);
+          this._world.addEvent('chat_out', `${this._world.character.name}: ${response}`);
           this._broadcastNewEvents();
         });
         break;
@@ -156,5 +156,16 @@ export class WSHandler {
     if (tile) {
       this._broadcast({ type: 'TILE_UPDATE', payload: { x, y, tile } });
     }
+  }
+
+  broadcastNPCUpdate(): void {
+    this._broadcast({
+      type: 'NPC_UPDATE',
+      payload: this._world.npcs,
+    });
+  }
+
+  broadcastInvention(invention: import('../../../shared/types').Invention): void {
+    this._broadcast({ type: 'INVENTION', payload: invention });
   }
 }

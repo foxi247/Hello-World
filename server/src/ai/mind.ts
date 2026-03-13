@@ -5,22 +5,27 @@ import {
   buildIntentPrompt,
   buildChatPrompt,
   buildMemorySummarizationPrompt,
+  buildInventionPrompt,
 } from './prompts';
 import { getRecentMemories, addMemory } from '../db/database';
 import type { CharacterState, ActionType, GameEvent } from '../../../shared/types';
 
 // ============================================================
-// FALLBACK responses when LLM is unavailable
+// FALLBACK ответы когда LLM недоступен (РУССКИЙ)
 // ============================================================
 const FALLBACK_THOUGHTS = [
-  'The wind is calm today. I should make the most of it.',
-  'I wonder if there are more berries further in.',
-  'The stones feel cold this morning.',
-  'A bit tired, but there is still work to do.',
-  'I should check on my supplies soon.',
-  'The clearing looks peaceful. I like it here.',
-  'Need to keep building. Bit by bit, it comes together.',
-  'Hunger gnaws a little. Time to find something to eat.',
+  'Ветер сегодня тихий. Надо этим воспользоваться.',
+  'Интересно, есть ли дальше ещё ягоды...',
+  'Камни холодные этим утром.',
+  'Немного устал, но ещё есть дела.',
+  'Надо проверить запасы.',
+  'Поляна выглядит мирно. Мне тут нравится.',
+  'Надо продолжать строить. По кирпичику, по камешку.',
+  'Голод даёт о себе знать. Пора поесть.',
+  'Хорошо бы найти кого-нибудь... Устал быть один.',
+  'Может, придумаю что-нибудь новое сегодня.',
+  'Дом потихоньку растёт. Горжусь собой.',
+  'Эх, были бы помощники... Столько всего надо сделать.',
 ];
 
 const FALLBACK_INTENTS: ActionType[] = ['WANDER', 'COLLECT_FOOD', 'COLLECT_WOOD', 'THINK'];
@@ -30,7 +35,7 @@ function randomFallback<T>(arr: T[]): T {
 }
 
 // ============================================================
-// Generate a thought — called every ~15 ticks
+// Генерация мысли — каждые ~15 тиков
 // ============================================================
 export async function generateThought(
   character: CharacterState,
@@ -51,12 +56,11 @@ export async function generateThought(
     return randomFallback(FALLBACK_THOUGHTS);
   }
 
-  // Clean up any accidental meta-commentary
   return sanitizeResponse(result.content);
 }
 
 // ============================================================
-// Select intent — called every ~20 ticks
+// Выбор намерения — каждые ~20 тиков
 // ============================================================
 export async function selectIntent(
   character: CharacterState,
@@ -84,27 +88,25 @@ export async function selectIntent(
     return urgentNeed ? pickUrgentFallback(urgentNeed) : randomFallback(FALLBACK_INTENTS);
   }
 
-  // Parse the response — expect one of the action names
   const raw = result.content.trim().toUpperCase().replace(/[^A-Z_]/g, '');
   const matched = availableActions.find(a => a === raw);
   if (matched) return matched;
 
-  // If no match, try to find a partial match
   const partial = availableActions.find(a => raw.includes(a) || a.includes(raw));
   if (partial) return partial;
 
-  console.warn('[Mind] Could not parse intent from:', result.content, '— using fallback');
+  console.warn('[Mind] Не удалось распознать намерение из:', result.content, '— используем фолбэк');
   return urgentNeed ? pickUrgentFallback(urgentNeed) : randomFallback(FALLBACK_INTENTS);
 }
 
 function pickUrgentFallback(urgentNeed: string): ActionType {
-  if (urgentNeed.includes('hunger')) return 'COLLECT_FOOD';
-  if (urgentNeed.includes('energy')) return 'REST';
+  if (urgentNeed.includes('голод') || urgentNeed.includes('hunger')) return 'COLLECT_FOOD';
+  if (urgentNeed.includes('энерг') || urgentNeed.includes('energy')) return 'REST';
   return 'WANDER';
 }
 
 // ============================================================
-// Generate chat response — called on player message
+// Ответ в чате — на сообщение игрока
 // ============================================================
 export async function generateChatResponse(
   character: CharacterState,
@@ -126,18 +128,53 @@ export async function generateChatResponse(
   return sanitizeResponse(result.content);
 }
 
-function getFallbackChatResponse(character: CharacterState, _msg: string): string {
+function getFallbackChatResponse(_character: CharacterState, _msg: string): string {
   const responses = [
-    `I heard you, but... my thoughts are scattered right now. Give me a moment.`,
-    `Something about your voice feels distant today. Could you say that again?`,
-    `Sorry, I was distracted. The wind was loud. What did you say?`,
-    `I'm here, just busy with my own thoughts. What do you need?`,
+    'Я тебя слышу, но... мысли разбегаются. Дай мне минутку.',
+    'Что-то в твоём голосе сегодня далёкое. Можешь повторить?',
+    'Прости, отвлёкся. Ветер шумел. Что ты сказал?',
+    'Я тут, просто задумался. Что тебе нужно?',
   ];
   return randomFallback(responses);
 }
 
 // ============================================================
-// Summarize recent events into a memory
+// Генерация изобретения — НОВОЕ
+// ============================================================
+export async function generateInvention(
+  character: CharacterState,
+  existingInventions: string[]
+): Promise<{ name: string; type: string; description: string; recipe: Record<string, number>; effect: string } | null> {
+  const systemPrompt = buildSystemPrompt(character);
+  const userPrompt = buildInventionPrompt(character, existingInventions);
+
+  const result = await callMistral(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    { maxTokens: 200, temperature: 0.8 }
+  );
+
+  if (!result.success || !result.content) return null;
+
+  try {
+    // Extract JSON from response
+    const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (parsed.name && parsed.type && parsed.description && parsed.recipe) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    console.warn('[Mind] Не удалось распарсить изобретение:', result.content);
+    return null;
+  }
+}
+
+// ============================================================
+// Суммаризация событий в память
 // ============================================================
 export async function summarizeIntoMemory(
   character: CharacterState,
@@ -165,30 +202,30 @@ export async function summarizeIntoMemory(
 }
 
 // ============================================================
-// Sanitize LLM output — remove meta-commentary
+// Санитизация вывода LLM
 // ============================================================
 function sanitizeResponse(text: string): string {
-  // Remove leading/trailing quotes
   text = text.replace(/^["']|["']$/g, '').trim();
 
-  // Block any accidental fourth-wall breaks
   const forbidden = [
     /\bAI\b/gi,
     /\bLLM\b/gi,
     /\blanguage model\b/gi,
     /\bsimulation\b/gi,
-    /\bgame\b/gi,
     /\bNPC\b/gi,
     /\bprogram\b/gi,
-    /\bcode\b/gi,
     /\bbrowser\b/gi,
     /\bcomputer\b/gi,
+    /\bсимуляци/gi,
+    /\bпрограмм/gi,
+    /\bнейросет/gi,
+    /\bискусственн/gi,
   ];
 
   for (const pattern of forbidden) {
     if (pattern.test(text)) {
-      console.warn('[Mind] Blocked fourth-wall break in response:', text);
-      return 'I find myself at a loss for words just now.';
+      console.warn('[Mind] Заблокирован выход из роли:', text);
+      return 'Не могу подобрать слов...';
     }
   }
 

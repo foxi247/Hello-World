@@ -56,10 +56,12 @@ let wsHandler: WSHandler;
 
 const simulation = new Simulation(world, {
   onCharacterUpdate: () => wsHandler?.broadcastCharacterUpdate(),
+  onNPCUpdate:       () => wsHandler?.broadcastNPCUpdate(),
   onNewEvent:        () => wsHandler?.broadcastNewEvents(),
   onThought:         (t) => wsHandler?.broadcastThought(t),
   onTileChanged:     (x, y) => wsHandler?.broadcastTileChanged(x, y),
   onDayPhase:        () => wsHandler?.broadcastDayPhase(),
+  onInvention:       (inv) => wsHandler?.broadcastInvention(inv),
 });
 
 wsHandler = new WSHandler(wss, simulation);

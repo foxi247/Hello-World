@@ -6,12 +6,14 @@ interface Props {
 }
 
 const EVENT_ICONS: Record<string, string> = {
-  action:   '⚙️',
-  thought:  '💭',
-  chat_in:  '💬',
-  chat_out: '🗣️',
-  system:   '📋',
-  build:    '🔨',
+  action:    '⚙️',
+  thought:   '💭',
+  chat_in:   '💬',
+  chat_out:  '🗣️',
+  system:    '📋',
+  build:     '🔨',
+  invention: '💡',
+  npc:       '👥',
 };
 
 const EVENT_COLORS: Record<string, string> = {
@@ -51,7 +53,7 @@ export function EventLog({ events }: Props) {
         color: '#668866',
         fontWeight: 'bold',
       }}>
-        📋 Event Log
+        📋 Журнал событий
       </div>
       <div ref={scrollRef} style={{
         height: 120,

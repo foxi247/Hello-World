@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import Phaser from 'phaser';
 import { WorldScene } from './scenes/WorldScene';
-import type { WorldState, CharacterState } from '../types';
+import type { WorldState, CharacterState, NPCState } from '../types';
 
 // ============================================================
 // Exposed ref API
@@ -12,6 +12,7 @@ export interface PhaserGameRef {
   updateTile: (x: number, y: number) => void;
   updateDayPhase: (phase: string, progress: number) => void;
   showThought: (thought: string) => void;
+  updateNPCs: (npcs: NPCState[]) => void;
 }
 
 interface Props {
@@ -47,6 +48,9 @@ const PhaserGame = forwardRef<PhaserGameRef, Props>(({ width, height }, ref) => 
     },
     showThought(thought: string) {
       sceneRef.current?.showThought(thought);
+    },
+    updateNPCs(npcs: NPCState[]) {
+      sceneRef.current?.updateNPCs(npcs);
     },
   }));
 

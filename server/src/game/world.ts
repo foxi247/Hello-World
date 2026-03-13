@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { WorldState, GameEvent, ChatMessage, CharacterState } from '../../../shared/types';
+import type { WorldState, GameEvent, ChatMessage, CharacterState, NPCState, Invention } from '../../../shared/types';
 import { buildInitialWorld, WORLD_WIDTH, WORLD_HEIGHT } from './worldMap';
 import { createCharacter } from './character';
 import {
@@ -74,6 +74,8 @@ export class WorldManager {
       height: WORLD_HEIGHT,
       tiles,
       character,
+      npcs: [],
+      inventions: [],
       tick: character.tickAge,
       dayPhase: 'day',
       dayProgress: 0,
@@ -82,7 +84,7 @@ export class WorldManager {
     };
 
     this._updateDayPhase(state);
-    console.log('[World] State loaded. Tick:', state.tick, 'Character:', character.name);
+    console.log('[World] Состояние загружено. Тик:', state.tick, 'Персонаж:', character.name);
     return state;
   }
 
@@ -93,6 +95,8 @@ export class WorldManager {
   get character(): CharacterState { return this._state.character; }
   get tiles() { return this._state.tiles; }
   get tick(): number { return this._state.tick; }
+  get npcs(): NPCState[] { return this._state.npcs; }
+  get inventions(): Invention[] { return this._state.inventions; }
 
   // ----------------------------------------------------------
   // Advance tick
@@ -193,17 +197,41 @@ export class WorldManager {
   }
 
   // ----------------------------------------------------------
-  // Persist current state
+  // NPCs
+  // ----------------------------------------------------------
+  addNPC(npc: NPCState): void {
+    this._state.npcs.push(npc);
+  }
+
+  removeNPC(id: string): void {
+    this._state.npcs = this._state.npcs.filter(n => n.id !== id);
+  }
+
+  // ----------------------------------------------------------
+  // Inventions
+  // ----------------------------------------------------------
+  addInvention(invention: Invention): void {
+    this._state.inventions.push(invention);
+  }
+
+  getInventionNames(): string[] {
+    return this._state.inventions.map(i => i.name);
+  }
+
+  // ----------------------------------------------------------
+  // Persist
   // ----------------------------------------------------------
   persist(): void {
     try {
       saveWorldState({
         tiles: this._state.tiles,
         tick: this._state.tick,
+        npcs: this._state.npcs,
+        inventions: this._state.inventions,
       });
       saveCharacterState(this._state.character);
     } catch (err) {
-      console.error('[World] Failed to persist state:', err);
+      console.error('[World] Ошибка сохранения:', err);
     }
   }
 
