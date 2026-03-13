@@ -540,7 +540,7 @@ export class Simulation {
       tile.type = newType as any;
       tile.passable = false;
       tile.resource = resource;
-      this._callbacks.onTileUpdate(pos.x, pos.y);
+      this._callbacks.onTileChanged(pos.x, pos.y);
     }
   }
 
