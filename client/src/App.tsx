@@ -91,7 +91,8 @@ export default function App() {
     <div style={{
       display: 'flex',
       flexDirection: 'column',
-      minHeight: '100vh',
+      height: '100vh',
+      overflow: 'hidden',
       background: '#0d0d0d',
       color: '#cccccc',
       fontFamily: '"Segoe UI", system-ui, sans-serif',

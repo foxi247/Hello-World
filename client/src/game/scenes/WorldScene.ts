@@ -645,14 +645,18 @@ export class WorldScene extends Phaser.Scene {
         onComplete: () => { this._isMoving = false; },
       });
 
+      // Only flip the body graphics, not the text
       if (targetX < curX) {
-        this._characterSprite.setScale(-1, 1);
+        this._characterBody.setScale(-1, 1);
       } else {
-        this._characterSprite.setScale(1, 1);
+        this._characterBody.setScale(1, 1);
       }
     }
 
     this._actionText.setText(char.currentIntentLabel || '');
+
+    // Show action particles
+    this._showActionEffect(char.currentAction, char.position);
 
     if (this._thoughtBubble.visible) {
       this._thoughtBubble.setPosition(
@@ -728,6 +732,82 @@ export class WorldScene extends Phaser.Scene {
       g.fillStyle(0xffffaa, alpha);
       g.fillCircle(x, y, 2);
     });
+  }
+
+  // ----------------------------------------------------------
+  // Action effects (mining sparks, eating, sleeping Zzz)
+  // ----------------------------------------------------------
+  private _actionEffectTimer = 0;
+  private _actionEffectGraphics: Phaser.GameObjects.Graphics | null = null;
+
+  private _showActionEffect(action: string, pos: { x: number; y: number }) {
+    if (!this._actionEffectGraphics) {
+      this._actionEffectGraphics = this.add.graphics();
+      this._actionEffectGraphics.setDepth(15);
+    }
+    this._actionEffectGraphics.clear();
+
+    const px = pos.x * TILE_SIZE + TILE_SIZE / 2;
+    const py = pos.y * TILE_SIZE + TILE_SIZE / 2;
+    const t = Date.now() / 300;
+
+    if (action === 'COLLECT_WOOD' || action === 'COLLECT_STONE') {
+      // Sparks/chips flying
+      for (let i = 0; i < 3; i++) {
+        const ox = Math.sin(t + i * 2) * 8;
+        const oy = Math.cos(t + i * 2) * 6 - 10;
+        const alpha = (Math.sin(t + i) + 1) * 0.4;
+        this._actionEffectGraphics.fillStyle(action === 'COLLECT_WOOD' ? 0xddaa44 : 0xcccccc, alpha);
+        this._actionEffectGraphics.fillCircle(px + ox, py + oy, 2);
+      }
+    } else if (action === 'EAT' || action === 'COLLECT_FOOD') {
+      // Small food particles
+      for (let i = 0; i < 2; i++) {
+        const ox = Math.sin(t + i * 3) * 5;
+        const oy = -8 - Math.abs(Math.sin(t + i)) * 6;
+        this._actionEffectGraphics.fillStyle(action === 'EAT' ? 0xff8844 : 0xdd3333, 0.6);
+        this._actionEffectGraphics.fillCircle(px + ox, py + oy, 2);
+      }
+    } else if (action === 'REST') {
+      // Zzz animation
+      const zCount = 3;
+      for (let i = 0; i < zCount; i++) {
+        const phase = (t * 0.3 + i * 0.8) % 3;
+        const zx = px + 8 + phase * 4;
+        const zy = py - 15 - phase * 8;
+        const alpha = Math.max(0, 1 - phase / 3);
+        const size = 6 + phase * 2;
+        // Draw Z
+        this._actionEffectGraphics.fillStyle(0xaaddff, alpha);
+        this._actionEffectGraphics.fillRect(zx, zy, size, 1.5);
+        this._actionEffectGraphics.fillRect(zx, zy + size * 0.4, size, 1.5);
+        this._actionEffectGraphics.fillRect(zx, zy, 1.5, size * 0.4);
+        this._actionEffectGraphics.fillRect(zx + size - 1.5, zy, 1.5, size * 0.4);
+      }
+    } else if (action === 'BUILD' || action === 'CRAFT') {
+      // Hammer motion
+      const swing = Math.sin(t * 2) * 6;
+      this._actionEffectGraphics.fillStyle(0x888888, 0.7);
+      this._actionEffectGraphics.fillRect(px + 10, py - 14 + swing, 3, 8);
+      this._actionEffectGraphics.fillStyle(0xaaaaaa, 0.7);
+      this._actionEffectGraphics.fillRect(px + 8, py - 16 + swing, 7, 4);
+      // Sparks on hit
+      if (Math.sin(t * 2) > 0.8) {
+        for (let i = 0; i < 4; i++) {
+          const sx = Math.random() * 10 - 5;
+          const sy = Math.random() * 6;
+          this._actionEffectGraphics.fillStyle(0xffcc44, 0.8);
+          this._actionEffectGraphics.fillCircle(px + 12 + sx, py - 8 + sy, 1.5);
+        }
+      }
+    } else if (action === 'INVENT') {
+      // Lightbulb glow
+      const glow = (Math.sin(t) + 1) * 0.3;
+      this._actionEffectGraphics.fillStyle(0xffff44, glow);
+      this._actionEffectGraphics.fillCircle(px, py - 20, 8);
+      this._actionEffectGraphics.fillStyle(0xffffaa, glow * 0.5);
+      this._actionEffectGraphics.fillCircle(px, py - 20, 12);
+    }
   }
 
   // ----------------------------------------------------------

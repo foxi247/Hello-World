@@ -30,8 +30,11 @@ const AI_THINK_INTERVAL  = parseInt(process.env.AI_THINK_INTERVAL  ?? '20');
 const AI_THOUGHT_INTERVAL = parseInt(process.env.AI_THOUGHT_INTERVAL ?? '15');
 const PERSIST_INTERVAL = 30;
 const MEMORY_SUMMARIZE_INTERVAL = 60;
-const INVENTION_INTERVAL = 300;      // каждые 300 тиков попытка изобретения
-const NPC_SPAWN_CHECK_INTERVAL = 200; // каждые 200 тиков проверка спавна NPC
+const INVENTION_INTERVAL = 300;
+const NPC_SPAWN_CHECK_INTERVAL = 200;
+const RESOURCE_REGEN_INTERVAL = 120;  // каждые 120 тиков ресурсы отрастают
+const DAY_CYCLE_TICKS = 400;
+const NIGHT_SPEED_MULTIPLIER = 5;    // ночью тики летят x5
 
 // ============================================================
 // Колбэки для WebSocket
@@ -80,12 +83,65 @@ export class Simulation {
     }
   }
 
+  private _sleeping = false;
+  private _nightTickAccum = 0;
+
   // ----------------------------------------------------------
   // Главный тик
   // ----------------------------------------------------------
   private async _tick(): Promise<void> {
     const char = this._world.character;
     const tiles = this._world.tiles;
+    const dayPhase = this._world.state.dayPhase;
+
+    // Night sleep system: everyone sleeps, time flies 5x faster
+    if (dayPhase === 'night' && !this._sleeping) {
+      this._sleeping = true;
+      // Force everyone to sleep
+      char.currentAction = 'REST';
+      char.currentIntentLabel = 'спит';
+      char.targetPosition = null;
+      for (const npc of this._world.npcs) {
+        npc.currentAction = 'REST';
+        npc.currentTask = 'спит';
+      }
+      this._world.addEvent('system', '🌙 Ночь. Все ложатся спать.');
+      this._callbacks.onNewEvent();
+    }
+
+    if (this._sleeping) {
+      // Fast-forward night: advance multiple ticks
+      for (let i = 0; i < NIGHT_SPEED_MULTIPLIER; i++) {
+        this._world.advanceTick();
+      }
+      // Restore energy/hunger while sleeping
+      char.needs.energy = Math.min(100, char.needs.energy + 0.8);
+      char.needs.mood = Math.min(100, char.needs.mood + 0.2);
+      char.needs.hunger = Math.max(0, char.needs.hunger - 0.15);
+      for (const npc of this._world.npcs) {
+        npc.needs.energy = Math.min(100, npc.needs.energy + 0.6);
+        npc.needs.hunger = Math.max(0, npc.needs.hunger - 0.1);
+      }
+      char.tickAge += NIGHT_SPEED_MULTIPLIER;
+
+      // Check if dawn
+      if (this._world.state.dayPhase === 'dawn' || this._world.state.dayPhase === 'day') {
+        this._sleeping = false;
+        char.currentAction = 'IDLE';
+        char.currentIntentLabel = 'просыпается';
+        for (const npc of this._world.npcs) {
+          npc.currentAction = 'IDLE';
+          npc.currentTask = 'проснулся';
+        }
+        this._world.addEvent('system', '🌅 Рассвет! Все просыпаются.');
+        this._callbacks.onNewEvent();
+      }
+
+      this._callbacks.onCharacterUpdate();
+      this._callbacks.onDayPhase();
+      if (this._world.npcs.length > 0) this._callbacks.onNPCUpdate();
+      return;
+    }
 
     // 1. Время
     this._world.advanceTick();
@@ -152,7 +208,12 @@ export class Simulation {
       this._checkNPCSpawn();
     }
 
-    // 9. Сохранение
+    // 9. Регенерация ресурсов
+    if (this._world.tick % RESOURCE_REGEN_INTERVAL === 0) {
+      this._regenerateResources();
+    }
+
+    // 10. Сохранение
     if (this._world.tick % PERSIST_INTERVAL === 0) {
       this._world.persist();
     }
@@ -304,40 +365,182 @@ export class Simulation {
       }
     }
 
-    // Companions stay near Alder
+    // Companion — active AI: wanders, collects food, interacts, follows
     if (npc.role === 'companion') {
       const char = this._world.character;
       const dist = Math.abs(npc.position.x - char.position.x) + Math.abs(npc.position.y - char.position.y);
-      if (dist > 3) {
-        // Move toward Alder
-        const dx = Math.sign(char.position.x - npc.position.x);
-        const dy = Math.sign(char.position.y - npc.position.y);
-        const nx = npc.position.x + dx;
-        const ny = npc.position.y + dy;
-        if (tiles[ny]?.[nx]?.passable) {
-          npc.position = { x: nx, y: ny };
-        }
-      }
-      npc.currentTask = 'рядом';
 
-      // Companion boosts mood
-      if (dist <= 2) {
-        char.needs.mood = Math.min(100, char.needs.mood + 0.02);
+      // Handle needs first
+      if (npc.needs.hunger < 25) {
+        const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+        if (hasFood) {
+          hasFood.amount -= 1;
+          if (hasFood.amount <= 0) char.inventory = char.inventory.filter(i => i.amount > 0);
+          npc.needs.hunger += 20;
+          npc.currentTask = 'ест';
+        } else {
+          npc.currentTask = 'голодна';
+        }
+        return;
+      }
+
+      if (npc.needs.energy < 20) {
+        npc.needs.energy += 0.5;
+        npc.currentTask = 'отдыхает';
+        return;
+      }
+
+      // Active behavior cycle
+      npc.actionProgress += 3;
+      const cycle = npc.actionProgress % 300;
+
+      if (cycle < 80) {
+        // Follow Alder
+        if (dist > 2) {
+          const dx = Math.sign(char.position.x - npc.position.x);
+          const dy = Math.sign(char.position.y - npc.position.y);
+          const nx = npc.position.x + dx;
+          const ny = npc.position.y + dy;
+          if (tiles[ny]?.[nx]?.passable) {
+            npc.position = { x: nx, y: ny };
+          }
+        }
+        npc.currentTask = 'рядом с ' + char.name;
+        if (dist <= 2) {
+          char.needs.mood = Math.min(100, char.needs.mood + 0.03);
+          npc.relationship = Math.min(100, npc.relationship + 0.02);
+        }
+      } else if (cycle < 140) {
+        // Collect food independently
+        npc.currentTask = 'собирает ягоды';
+        if (npc.actionProgress % 20 === 0) {
+          addToInventory(char, 'food', 1);
+          // Wander while collecting
+          const dx = Math.floor(Math.random() * 3) - 1;
+          const dy = Math.floor(Math.random() * 3) - 1;
+          const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
+          const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
+          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+        }
+      } else if (cycle < 200) {
+        // Wander/explore
+        if (Math.random() < 0.15) {
+          const dx = Math.floor(Math.random() * 3) - 1;
+          const dy = Math.floor(Math.random() * 3) - 1;
+          const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
+          const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
+          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+        }
+        npc.currentTask = 'гуляет';
+      } else {
+        // Return to Alder and interact
+        if (dist > 2) {
+          const dx = Math.sign(char.position.x - npc.position.x);
+          const dy = Math.sign(char.position.y - npc.position.y);
+          const nx = npc.position.x + dx;
+          const ny = npc.position.y + dy;
+          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+        }
+        npc.currentTask = 'общается';
+        if (dist <= 2) {
+          char.needs.mood = Math.min(100, char.needs.mood + 0.05);
+          npc.relationship = Math.min(100, npc.relationship + 0.03);
+        }
       }
     }
 
-    // Children wander around home
+    // Children — wander, play, sometimes help
     if (npc.role === 'child') {
-      if (Math.random() < 0.05) {
-        const dx = Math.floor(Math.random() * 3) - 1;
-        const dy = Math.floor(Math.random() * 3) - 1;
-        const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
-        const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
-        if (tiles[ny]?.[nx]?.passable) {
-          npc.position = { x: nx, y: ny };
+      npc.actionProgress += 2;
+      const cycle = npc.actionProgress % 200;
+
+      if (cycle < 100) {
+        // Playing around
+        if (Math.random() < 0.08) {
+          const dx = Math.floor(Math.random() * 3) - 1;
+          const dy = Math.floor(Math.random() * 3) - 1;
+          const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
+          const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
+          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+        }
+        npc.currentTask = 'играет';
+      } else if (cycle < 150) {
+        // Follow parent
+        const char = this._world.character;
+        const dist = Math.abs(npc.position.x - char.position.x) + Math.abs(npc.position.y - char.position.y);
+        if (dist > 3) {
+          const dx = Math.sign(char.position.x - npc.position.x);
+          const dy = Math.sign(char.position.y - npc.position.y);
+          const nx = npc.position.x + dx;
+          const ny = npc.position.y + dy;
+          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+        }
+        npc.currentTask = 'бежит к папе';
+      } else {
+        // Helps collect a little
+        if (npc.actionProgress % 30 === 0) {
+          const char = this._world.character;
+          addToInventory(char, 'food', 1);
+          npc.currentTask = 'помогает';
+        } else {
+          npc.currentTask = 'помогает';
         }
       }
-      npc.currentTask = 'играет';
+
+      // Children eat from shared food
+      if (npc.needs.hunger < 30) {
+        const char = this._world.character;
+        const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+        if (hasFood) {
+          hasFood.amount -= 1;
+          if (hasFood.amount <= 0) char.inventory = char.inventory.filter(i => i.amount > 0);
+          npc.needs.hunger += 25;
+        }
+      }
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Регенерация ресурсов
+  // ----------------------------------------------------------
+  private _regenerateResources(): void {
+    const tiles = this._world.tiles;
+    // Count current resources
+    let trees = 0, stones = 0, bushes = 0;
+    const grassTiles: { x: number; y: number }[] = [];
+    for (let y = 0; y < tiles.length; y++) {
+      for (let x = 0; x < tiles[y].length; x++) {
+        const t = tiles[y][x];
+        if (t.type === 'TREE') trees++;
+        else if (t.type === 'STONE') stones++;
+        else if (t.type === 'BERRY_BUSH') bushes++;
+        else if (t.type === 'GRASS' && y > 0 && y < tiles.length - 1 && x > 0 && x < tiles[y].length - 1) {
+          grassTiles.push({ x, y });
+        }
+      }
+    }
+    if (grassTiles.length === 0) return;
+
+    // Regrow: small chance each cycle, favoring scarce resources
+    const regenChance = 0.03;
+    for (const pos of grassTiles) {
+      if (Math.random() > regenChance) continue;
+      const roll = Math.random();
+      let newType: string;
+      let resource: number;
+      if (roll < 0.5 && trees < 30) {
+        newType = 'TREE'; resource = 10;
+      } else if (roll < 0.75 && stones < 15) {
+        newType = 'STONE'; resource = 8;
+      } else if (bushes < 12) {
+        newType = 'BERRY_BUSH'; resource = 6;
+      } else continue;
+
+      const tile = tiles[pos.y][pos.x];
+      tile.type = newType as any;
+      tile.passable = false;
+      tile.resource = resource;
+      this._callbacks.onTileUpdate(pos.x, pos.y);
     }
   }
 

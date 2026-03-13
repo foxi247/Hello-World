@@ -67,6 +67,7 @@ const PhaserGame = forwardRef<PhaserGameRef, Props>(({ width, height }, ref) => 
       render: {
         pixelArt: false,
         antialias: true,
+        roundPixels: true,
       },
     };
 
