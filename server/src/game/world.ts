@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { WorldState, GameEvent, ChatMessage, CharacterState, NPCState, Invention } from '../../../shared/types';
+import type { WorldState, GameEvent, ChatMessage, CharacterState, NPCState, Invention, Animal } from '../../../shared/types';
 import { buildInitialWorld, WORLD_WIDTH, WORLD_HEIGHT } from './worldMap';
 import { createCharacter } from './character';
 import {
@@ -47,6 +47,10 @@ export class WorldManager {
     if (savedChar) {
       try {
         character = savedChar as CharacterState;
+        // Ensure emotions exist on loaded characters
+        if (!character.emotions) {
+          character.emotions = { love: 0, loneliness: 50, pride: 20, grief: 0, excitement: 30, fear: 0 };
+        }
       } catch { /* ignore */ }
     }
 
@@ -75,6 +79,7 @@ export class WorldManager {
       tiles,
       character,
       npcs: [],
+      animals: [],
       inventions: [],
       tick: character.tickAge,
       dayPhase: 'day',
@@ -96,6 +101,7 @@ export class WorldManager {
   get tiles() { return this._state.tiles; }
   get tick(): number { return this._state.tick; }
   get npcs(): NPCState[] { return this._state.npcs; }
+  get animals(): Animal[] { return this._state.animals; }
   get inventions(): Invention[] { return this._state.inventions; }
 
   // ----------------------------------------------------------
@@ -208,6 +214,17 @@ export class WorldManager {
   }
 
   // ----------------------------------------------------------
+  // Animals
+  // ----------------------------------------------------------
+  addAnimal(animal: Animal): void {
+    this._state.animals.push(animal);
+  }
+
+  removeAnimal(id: string): void {
+    this._state.animals = this._state.animals.filter(a => a.id !== id);
+  }
+
+  // ----------------------------------------------------------
   // Inventions
   // ----------------------------------------------------------
   addInvention(invention: Invention): void {
@@ -227,6 +244,7 @@ export class WorldManager {
         tiles: this._state.tiles,
         tick: this._state.tick,
         npcs: this._state.npcs,
+        animals: this._state.animals,
         inventions: this._state.inventions,
       });
       saveCharacterState(this._state.character);

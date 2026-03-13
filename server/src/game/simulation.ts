@@ -11,9 +11,12 @@ import {
   createNPC,
   addToInventory,
   getInventoryAmount,
+  updateEmotions,
+  updateNPCEmotions,
+  clamp,
 } from './character';
 import { generateThought, selectIntent, summarizeIntoMemory, generateInvention } from '../ai/mind';
-import type { ActionType, NPCState, Invention } from '../../../shared/types';
+import type { ActionType, NPCState, Invention, Animal, AnimalType } from '../../../shared/types';
 import { v4 as uuidv4 } from 'uuid';
 import {
   WORLD_WIDTH,
@@ -32,9 +35,11 @@ const PERSIST_INTERVAL = 30;
 const MEMORY_SUMMARIZE_INTERVAL = 60;
 const INVENTION_INTERVAL = 300;
 const NPC_SPAWN_CHECK_INTERVAL = 200;
-const RESOURCE_REGEN_INTERVAL = 120;  // каждые 120 тиков ресурсы отрастают
-const DAY_CYCLE_TICKS = 400;
-const NIGHT_SPEED_MULTIPLIER = 5;    // ночью тики летят x5
+const RESOURCE_REGEN_INTERVAL = 120;
+const ANIMAL_SPAWN_INTERVAL = 150;
+const ANIMAL_TICK_INTERVAL = 5;
+const EMOTION_UPDATE_INTERVAL = 10;
+const NIGHT_SPEED_MULTIPLIER = 5;
 
 // ============================================================
 // Колбэки для WebSocket
@@ -42,6 +47,7 @@ const NIGHT_SPEED_MULTIPLIER = 5;    // ночью тики летят x5
 export type SimulationCallbacks = {
   onCharacterUpdate: () => void;
   onNPCUpdate: () => void;
+  onAnimalUpdate: () => void;
   onNewEvent: () => void;
   onThought: (thought: string) => void;
   onTileChanged: (x: number, y: number) => void;
@@ -64,6 +70,8 @@ export class Simulation {
   private _ticksSinceLastThought = 0;
   private _ticksSinceLastInvention = 0;
   private _recentEventMessages: string[] = [];
+  private _sleeping = false;
+  private _chatCommandQueue: string[] = [];
 
   constructor(world: WorldManager, callbacks: SimulationCallbacks) {
     this._world = world;
@@ -83,9 +91,6 @@ export class Simulation {
     }
   }
 
-  private _sleeping = false;
-  private _nightTickAccum = 0;
-
   // ----------------------------------------------------------
   // Главный тик
   // ----------------------------------------------------------
@@ -94,10 +99,9 @@ export class Simulation {
     const tiles = this._world.tiles;
     const dayPhase = this._world.state.dayPhase;
 
-    // Night sleep system: everyone sleeps, time flies 5x faster
+    // Night sleep system
     if (dayPhase === 'night' && !this._sleeping) {
       this._sleeping = true;
-      // Force everyone to sleep
       char.currentAction = 'REST';
       char.currentIntentLabel = 'спит';
       char.targetPosition = null;
@@ -110,11 +114,9 @@ export class Simulation {
     }
 
     if (this._sleeping) {
-      // Fast-forward night: advance multiple ticks
       for (let i = 0; i < NIGHT_SPEED_MULTIPLIER; i++) {
         this._world.advanceTick();
       }
-      // Restore energy/hunger while sleeping
       char.needs.energy = Math.min(100, char.needs.energy + 0.8);
       char.needs.mood = Math.min(100, char.needs.mood + 0.2);
       char.needs.hunger = Math.max(0, char.needs.hunger - 0.15);
@@ -124,7 +126,6 @@ export class Simulation {
       }
       char.tickAge += NIGHT_SPEED_MULTIPLIER;
 
-      // Check if dawn
       if (this._world.state.dayPhase === 'dawn' || this._world.state.dayPhase === 'day') {
         this._sleeping = false;
         char.currentAction = 'IDLE';
@@ -159,7 +160,12 @@ export class Simulation {
       this._tickNPC(npc, tiles);
     }
 
-    // 4. Текущее действие
+    // 4. Chat command override
+    if (this._chatCommandQueue.length > 0 && char.currentAction === 'IDLE') {
+      this._executeChatCommand(this._chatCommandQueue.shift()!);
+    }
+
+    // 5. Текущее действие
     if (char.currentAction === 'IDLE' || char.currentAction === 'MOVE_TO') {
       this._startNewAction();
     } else {
@@ -175,6 +181,16 @@ export class Simulation {
           this._recentEventMessages.push(result.eventMessage);
           this._callbacks.onNewEvent();
         }
+
+        // Post-action: handle hunt/tame results
+        if (char.currentAction === 'HUNT') {
+          this._resolveHunt();
+        } else if (char.currentAction === 'TAME') {
+          this._resolveTame();
+        } else if (char.currentAction === 'FARM') {
+          this._resolveFarm();
+        }
+
         char.currentAction = 'IDLE';
         char.actionProgress = 0;
         char.targetPosition = null;
@@ -183,19 +199,19 @@ export class Simulation {
 
     this._callbacks.onCharacterUpdate();
 
-    // 5. Генерация мыслей
+    // 6. Генерация мыслей
     if (this._ticksSinceLastThought >= AI_THOUGHT_INTERVAL && !this._thoughtBusy) {
       this._ticksSinceLastThought = 0;
       this._generateThought();
     }
 
-    // 6. Выбор намерения
+    // 7. Выбор намерения
     if (this._ticksSinceLastIntent >= AI_THINK_INTERVAL && !this._aiThinkBusy) {
       this._ticksSinceLastIntent = 0;
       this._selectNextIntent();
     }
 
-    // 7. Система изобретений
+    // 8. Система изобретений
     if (this._ticksSinceLastInvention >= INVENTION_INTERVAL && !this._inventionBusy) {
       if (char.needs.hunger > 50 && char.needs.energy > 40 && char.needs.mood > 40) {
         this._ticksSinceLastInvention = 0;
@@ -203,36 +219,54 @@ export class Simulation {
       }
     }
 
-    // 8. Спавн NPC
+    // 9. Спавн NPC
     if (this._world.tick % NPC_SPAWN_CHECK_INTERVAL === 0) {
       this._checkNPCSpawn();
     }
 
-    // 9. Регенерация ресурсов
+    // 10. Регенерация ресурсов
     if (this._world.tick % RESOURCE_REGEN_INTERVAL === 0) {
       this._regenerateResources();
     }
 
-    // 10. Сохранение
+    // 11. Животные
+    if (this._world.tick % ANIMAL_SPAWN_INTERVAL === 0) {
+      this._spawnAnimals();
+    }
+    if (this._world.tick % ANIMAL_TICK_INTERVAL === 0) {
+      this._tickAnimals();
+    }
+
+    // 12. Эмоции
+    if (this._world.tick % EMOTION_UPDATE_INTERVAL === 0) {
+      this._updateAllEmotions();
+    }
+
+    // 13. Сохранение
     if (this._world.tick % PERSIST_INTERVAL === 0) {
       this._world.persist();
     }
 
-    // 10. Суммаризация памяти
+    // 14. Суммаризация памяти
     if (this._world.tick % MEMORY_SUMMARIZE_INTERVAL === 0 && this._recentEventMessages.length > 3) {
       const events = [...this._recentEventMessages];
       this._recentEventMessages = [];
       summarizeIntoMemory(char, events, this._world.tick).catch(console.error);
     }
 
-    // 11. Фаза дня
+    // 15. Фаза дня
     if (this._world.tick % 5 === 0) {
       this._callbacks.onDayPhase();
     }
 
-    // 12. NPC update broadcast
+    // 16. NPC update broadcast
     if (this._world.npcs.length > 0 && this._world.tick % 3 === 0) {
       this._callbacks.onNPCUpdate();
+    }
+
+    // 17. Animal update broadcast
+    if (this._world.animals.length > 0 && this._world.tick % 5 === 0) {
+      this._callbacks.onAnimalUpdate();
     }
   }
 
@@ -248,7 +282,7 @@ export class Simulation {
 
     if (urgent) {
       if (urgent.includes('голод') || urgent.includes('еды') || urgent.includes('hunger') || urgent.includes('food')) {
-        const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+        const hasFood = char.inventory.find(i => (i.type === 'food' || i.type === 'meat') && i.amount > 0);
         nextAction = hasFood ? 'EAT' : 'COLLECT_FOOD';
       } else if (urgent.includes('сил') || urgent.includes('отдох') || urgent.includes('rest') || urgent.includes('energy')) {
         nextAction = 'REST';
@@ -272,13 +306,19 @@ export class Simulation {
   private _ruleBasedAction(): ActionType {
     const char = this._world.character;
     const inv = char.inventory;
-    const foodAmt  = inv.find(i => i.type === 'food')?.amount  ?? 0;
+    const foodAmt  = (inv.find(i => i.type === 'food')?.amount ?? 0) + (inv.find(i => i.type === 'meat')?.amount ?? 0);
     const woodAmt  = inv.find(i => i.type === 'wood')?.amount  ?? 0;
     const stoneAmt = inv.find(i => i.type === 'stone')?.amount ?? 0;
 
     // Срочные потребности
     if (char.needs.hunger < 30 && foodAmt > 0) return 'EAT';
-    if (char.needs.hunger < 50 && foodAmt === 0) return 'COLLECT_FOOD';
+    if (char.needs.hunger < 50 && foodAmt === 0) {
+      // Hunt if possible, else collect food
+      if (this._world.animals.filter(a => a.state === 'wild').length > 0) {
+        return Math.random() < 0.5 ? 'HUNT' : 'COLLECT_FOOD';
+      }
+      return 'COLLECT_FOOD';
+    }
     if (char.needs.energy < 30) return 'REST';
 
     // Строительство — приоритет если можно
@@ -292,6 +332,23 @@ export class Simulation {
     if (woodAmt < needWood) return 'COLLECT_WOOD';
     if (stoneAmt < needStone) return 'COLLECT_STONE';
     if (foodAmt < 5) return 'COLLECT_FOOD';
+
+    // Tame animals if possible and have food
+    const wildAnimals = this._world.animals.filter(a => a.state === 'wild');
+    const tamedAnimals = this._world.animals.filter(a => a.state === 'tamed' || a.state === 'farm');
+    if (wildAnimals.length > 0 && tamedAnimals.length < 5 && getInventoryAmount(char, 'food') >= 3 && Math.random() < 0.15) {
+      return 'TAME';
+    }
+
+    // Farm if have farm animals
+    if (tamedAnimals.length > 0 && Math.random() < 0.1) {
+      return 'FARM';
+    }
+
+    // Hunt occasionally
+    if (wildAnimals.length > 0 && Math.random() < 0.1) {
+      return 'HUNT';
+    }
 
     // Изобретения если всё хорошо
     if (char.needs.mood > 60 && char.needs.hunger > 60 && Math.random() < 0.2) return 'INVENT';
@@ -318,19 +375,124 @@ export class Simulation {
   }
 
   // ----------------------------------------------------------
+  // Chat commands — player tells character what to do
+  // ----------------------------------------------------------
+  queueChatCommand(message: string): void {
+    this._chatCommandQueue.push(message);
+  }
+
+  private _executeChatCommand(message: string): void {
+    const char = this._world.character;
+    const tiles = this._world.tiles;
+    const msg = message.toLowerCase();
+
+    // Movement commands
+    if (msg.includes('дом') || msg.includes('домой') || msg.includes('home')) {
+      char.currentAction = 'MOVE_TO';
+      char.targetPosition = { x: 10, y: 11 };
+      char.currentIntentLabel = 'идёт домой';
+      this._world.addEvent('action', `${char.name} идёт домой по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('руби') || msg.includes('дерев') || msg.includes('wood') || msg.includes('chop')) {
+      startAction(char, 'COLLECT_WOOD', tiles);
+      this._world.addEvent('action', `${char.name} пошёл рубить дерево по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('камн') || msg.includes('stone') || msg.includes('mine')) {
+      startAction(char, 'COLLECT_STONE', tiles);
+      this._world.addEvent('action', `${char.name} пошёл добывать камни по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('ягод') || msg.includes('еды') || msg.includes('еда') || msg.includes('собер') || msg.includes('food') || msg.includes('berry')) {
+      startAction(char, 'COLLECT_FOOD', tiles);
+      this._world.addEvent('action', `${char.name} пошёл собирать ягоды по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('ешь') || msg.includes('поешь') || msg.includes('eat')) {
+      startAction(char, 'EAT', tiles);
+      this._world.addEvent('action', `${char.name} пошёл есть по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('спи') || msg.includes('отдых') || msg.includes('sleep') || msg.includes('rest')) {
+      startAction(char, 'REST', tiles);
+      this._world.addEvent('action', `${char.name} пошёл отдыхать по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('строй') || msg.includes('build')) {
+      startAction(char, 'BUILD', tiles);
+      this._world.addEvent('action', `${char.name} начал строить по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('охот') || msg.includes('hunt')) {
+      startAction(char, 'HUNT', tiles);
+      this._world.addEvent('action', `${char.name} пошёл на охоту по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('прируч') || msg.includes('tame')) {
+      startAction(char, 'TAME', tiles);
+      this._world.addEvent('action', `${char.name} пытается приручить животное по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    if (msg.includes('ферм') || msg.includes('farm')) {
+      startAction(char, 'FARM', tiles);
+      this._world.addEvent('action', `${char.name} занялся фермой по просьбе.`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    // Movement to specific coordinates
+    const coordMatch = msg.match(/(?:иди|пройди|сходи|go)\s+(?:к|на|в|to)?\s*(?:\()?(\d+)\s*[,\s]\s*(\d+)/);
+    if (coordMatch) {
+      const tx = parseInt(coordMatch[1]);
+      const ty = parseInt(coordMatch[2]);
+      if (tx >= 0 && tx < WORLD_WIDTH && ty >= 0 && ty < WORLD_HEIGHT && tiles[ty]?.[tx]?.passable) {
+        char.currentAction = 'MOVE_TO';
+        char.targetPosition = { x: tx, y: ty };
+        char.currentIntentLabel = `идёт к (${tx},${ty})`;
+        this._world.addEvent('action', `${char.name} идёт к точке (${tx},${ty}) по просьбе.`);
+        this._callbacks.onNewEvent();
+        return;
+      }
+    }
+  }
+
+  // ----------------------------------------------------------
   // NPC тик — автономное поведение
   // ----------------------------------------------------------
   private _tickNPC(npc: NPCState, tiles: import('../../../shared/types').WorldTile[][]): void {
+    // Ensure emotions exist
+    if (!npc.emotions) {
+      npc.emotions = { love: 0, loneliness: 50, pride: 20, grief: 0, excitement: 30, fear: 0 };
+    }
+
     // Workers auto-collect resources
     if (npc.role === 'worker') {
       if (npc.needs.hunger < 20 || npc.needs.energy < 15) {
-        // NPC отдыхает или ест из общих запасов
         if (npc.needs.energy < 15) {
           npc.needs.energy += 0.5;
           npc.currentTask = 'отдыхает';
         } else {
           const char = this._world.character;
-          const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+          const hasFood = char.inventory.find(i => (i.type === 'food' || i.type === 'meat') && i.amount > 0);
           if (hasFood) {
             hasFood.amount -= 1;
             if (hasFood.amount <= 0) char.inventory = char.inventory.filter(i => i.amount > 0);
@@ -345,14 +507,12 @@ export class Simulation {
       npc.actionProgress += 5;
       if (npc.actionProgress >= 100) {
         npc.actionProgress = 0;
-        // Randomly choose resource to collect
         const roll = Math.random();
         const type = roll < 0.4 ? 'wood' : roll < 0.7 ? 'stone' : 'food';
         const char = this._world.character;
         addToInventory(char, type as any, 1);
         npc.currentTask = `собрал ${type === 'wood' ? 'дерево' : type === 'stone' ? 'камень' : 'еду'}`;
 
-        // Move NPC around slightly
         const dx = Math.floor(Math.random() * 3) - 1;
         const dy = Math.floor(Math.random() * 3) - 1;
         const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
@@ -365,14 +525,13 @@ export class Simulation {
       }
     }
 
-    // Companion — active AI: wanders, collects food, interacts, follows
+    // Companion — active AI
     if (npc.role === 'companion') {
       const char = this._world.character;
       const dist = Math.abs(npc.position.x - char.position.x) + Math.abs(npc.position.y - char.position.y);
 
-      // Handle needs first
       if (npc.needs.hunger < 25) {
-        const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+        const hasFood = char.inventory.find(i => (i.type === 'food' || i.type === 'meat') && i.amount > 0);
         if (hasFood) {
           hasFood.amount -= 1;
           if (hasFood.amount <= 0) char.inventory = char.inventory.filter(i => i.amount > 0);
@@ -390,32 +549,26 @@ export class Simulation {
         return;
       }
 
-      // Active behavior cycle
       npc.actionProgress += 3;
       const cycle = npc.actionProgress % 300;
 
       if (cycle < 80) {
-        // Follow Alder
         if (dist > 2) {
-          const dx = Math.sign(char.position.x - npc.position.x);
-          const dy = Math.sign(char.position.y - npc.position.y);
-          const nx = npc.position.x + dx;
-          const ny = npc.position.y + dy;
-          if (tiles[ny]?.[nx]?.passable) {
-            npc.position = { x: nx, y: ny };
-          }
+          this._moveToward(npc, char.position, tiles);
         }
         npc.currentTask = 'рядом с ' + char.name;
         if (dist <= 2) {
-          char.needs.mood = Math.min(100, char.needs.mood + 0.03);
+          char.needs.mood = clamp(char.needs.mood + 0.03, 0, 100);
           npc.relationship = Math.min(100, npc.relationship + 0.02);
+          // Emotional bonding
+          if (npc.emotions.love > 60) {
+            npc.emotions.excitement = clamp(npc.emotions.excitement + 0.04, 0, 100);
+          }
         }
       } else if (cycle < 140) {
-        // Collect food independently
         npc.currentTask = 'собирает ягоды';
         if (npc.actionProgress % 20 === 0) {
           addToInventory(char, 'food', 1);
-          // Wander while collecting
           const dx = Math.floor(Math.random() * 3) - 1;
           const dy = Math.floor(Math.random() * 3) - 1;
           const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, npc.position.x + dx));
@@ -423,7 +576,6 @@ export class Simulation {
           if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
         }
       } else if (cycle < 200) {
-        // Wander/explore
         if (Math.random() < 0.15) {
           const dx = Math.floor(Math.random() * 3) - 1;
           const dy = Math.floor(Math.random() * 3) - 1;
@@ -433,17 +585,19 @@ export class Simulation {
         }
         npc.currentTask = 'гуляет';
       } else {
-        // Return to Alder and interact
         if (dist > 2) {
-          const dx = Math.sign(char.position.x - npc.position.x);
-          const dy = Math.sign(char.position.y - npc.position.y);
-          const nx = npc.position.x + dx;
-          const ny = npc.position.y + dy;
-          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+          this._moveToward(npc, char.position, tiles);
         }
-        npc.currentTask = 'общается';
+        // Emotional states affect behavior
+        if (npc.emotions.love > 80 && npc.emotions.excitement > 60) {
+          npc.currentTask = '❤ влюблена';
+        } else if (npc.emotions.love > 50) {
+          npc.currentTask = 'обнимает';
+        } else {
+          npc.currentTask = 'общается';
+        }
         if (dist <= 2) {
-          char.needs.mood = Math.min(100, char.needs.mood + 0.05);
+          char.needs.mood = clamp(char.needs.mood + 0.05, 0, 100);
           npc.relationship = Math.min(100, npc.relationship + 0.03);
         }
       }
@@ -455,7 +609,6 @@ export class Simulation {
       const cycle = npc.actionProgress % 200;
 
       if (cycle < 100) {
-        // Playing around
         if (Math.random() < 0.08) {
           const dx = Math.floor(Math.random() * 3) - 1;
           const dy = Math.floor(Math.random() * 3) - 1;
@@ -463,39 +616,363 @@ export class Simulation {
           const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, npc.position.y + dy));
           if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
         }
-        npc.currentTask = 'играет';
+        npc.currentTask = npc.emotions.excitement > 60 ? 'весело играет!' : 'играет';
       } else if (cycle < 150) {
-        // Follow parent
         const char = this._world.character;
         const dist = Math.abs(npc.position.x - char.position.x) + Math.abs(npc.position.y - char.position.y);
         if (dist > 3) {
-          const dx = Math.sign(char.position.x - npc.position.x);
-          const dy = Math.sign(char.position.y - npc.position.y);
-          const nx = npc.position.x + dx;
-          const ny = npc.position.y + dy;
-          if (tiles[ny]?.[nx]?.passable) npc.position = { x: nx, y: ny };
+          this._moveToward(npc, char.position, tiles);
         }
         npc.currentTask = 'бежит к папе';
       } else {
-        // Helps collect a little
         if (npc.actionProgress % 30 === 0) {
           const char = this._world.character;
           addToInventory(char, 'food', 1);
-          npc.currentTask = 'помогает';
-        } else {
-          npc.currentTask = 'помогает';
         }
+        npc.currentTask = 'помогает';
       }
 
-      // Children eat from shared food
       if (npc.needs.hunger < 30) {
         const char = this._world.character;
-        const hasFood = char.inventory.find(i => i.type === 'food' && i.amount > 0);
+        const hasFood = char.inventory.find(i => (i.type === 'food' || i.type === 'meat') && i.amount > 0);
         if (hasFood) {
           hasFood.amount -= 1;
           if (hasFood.amount <= 0) char.inventory = char.inventory.filter(i => i.amount > 0);
           npc.needs.hunger += 25;
         }
+      }
+    }
+
+    // NPC-NPC interactions
+    for (const other of this._world.npcs) {
+      if (other.id === npc.id) continue;
+      const dist = Math.abs(npc.position.x - other.position.x) + Math.abs(npc.position.y - other.position.y);
+      if (dist <= 2 && Math.random() < 0.01) {
+        // Brief interaction
+        npc.needs.mood = clamp(npc.needs.mood + 1, 0, 100);
+        other.needs.mood = clamp(other.needs.mood + 1, 0, 100);
+      }
+    }
+  }
+
+  private _moveToward(npc: NPCState, target: { x: number; y: number }, tiles: import('../../../shared/types').WorldTile[][]): void {
+    const dx = Math.sign(target.x - npc.position.x);
+    const dy = Math.sign(target.y - npc.position.y);
+    const nx = npc.position.x + dx;
+    const ny = npc.position.y + dy;
+    if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT && tiles[ny]?.[nx]?.passable) {
+      npc.position = { x: nx, y: ny };
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Animals system
+  // ----------------------------------------------------------
+  private _spawnAnimals(): void {
+    const animals = this._world.animals;
+    const wildCount = animals.filter(a => a.state === 'wild').length;
+
+    // Keep ~3-5 wild animals in the world
+    if (wildCount < 3) {
+      const types: AnimalType[] = ['rabbit', 'deer', 'chicken', 'wolf'];
+      const weights = [0.35, 0.25, 0.25, 0.15];
+      const roll = Math.random();
+      let cumulative = 0;
+      let type: AnimalType = 'rabbit';
+      for (let i = 0; i < types.length; i++) {
+        cumulative += weights[i];
+        if (roll < cumulative) { type = i as any; type = types[i]; break; }
+      }
+
+      // Spawn at map edge
+      const edge = Math.floor(Math.random() * 4);
+      let x: number, y: number;
+      const tiles = this._world.tiles;
+      if (edge === 0) { x = 1; y = 1 + Math.floor(Math.random() * (WORLD_HEIGHT - 2)); }
+      else if (edge === 1) { x = WORLD_WIDTH - 2; y = 1 + Math.floor(Math.random() * (WORLD_HEIGHT - 2)); }
+      else if (edge === 2) { x = 1 + Math.floor(Math.random() * (WORLD_WIDTH - 2)); y = 1; }
+      else { x = 1 + Math.floor(Math.random() * (WORLD_WIDTH - 2)); y = WORLD_HEIGHT - 2; }
+
+      if (tiles[y]?.[x]?.passable) {
+        const animal: Animal = {
+          id: uuidv4(),
+          type,
+          position: { x, y },
+          state: 'wild',
+          health: 100,
+          hunger: 80,
+          produceTimer: 0,
+        };
+        this._world.addAnimal(animal);
+        const animalNames: Record<AnimalType, string> = {
+          rabbit: '🐰 Кролик', deer: '🦌 Олень', wolf: '🐺 Волк',
+          chicken: '🐔 Курица', cow: '🐄 Корова', pig: '🐷 Свинья'
+        };
+        this._world.addEvent('animal', `${animalNames[type]} появился на поляне!`);
+        this._callbacks.onNewEvent();
+        this._callbacks.onAnimalUpdate();
+      }
+    }
+  }
+
+  private _tickAnimals(): void {
+    const tiles = this._world.tiles;
+    const char = this._world.character;
+    const toRemove: string[] = [];
+
+    for (const animal of this._world.animals) {
+      animal.hunger = Math.max(0, animal.hunger - 0.1);
+
+      if (animal.state === 'wild') {
+        // Wild animals wander
+        if (Math.random() < 0.2) {
+          const dx = Math.floor(Math.random() * 3) - 1;
+          const dy = Math.floor(Math.random() * 3) - 1;
+          const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, animal.position.x + dx));
+          const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, animal.position.y + dy));
+          if (tiles[ny]?.[nx]?.passable) animal.position = { x: nx, y: ny };
+        }
+
+        // Wolf attacks if near character
+        if (animal.type === 'wolf') {
+          const dist = Math.abs(animal.position.x - char.position.x) + Math.abs(animal.position.y - char.position.y);
+          if (dist <= 2) {
+            char.needs.mood = clamp(char.needs.mood - 5, 0, 100);
+            char.emotions.fear = clamp(char.emotions.fear + 15, 0, 100);
+            if (Math.random() < 0.3) {
+              char.needs.energy = clamp(char.needs.energy - 10, 0, 100);
+              this._world.addEvent('animal', `🐺 Волк напал на ${char.name}!`);
+              this._callbacks.onNewEvent();
+            }
+          }
+          // Wolf moves toward character sometimes
+          if (dist > 2 && dist <= 6 && Math.random() < 0.3) {
+            const dx = Math.sign(char.position.x - animal.position.x);
+            const dy = Math.sign(char.position.y - animal.position.y);
+            const nx = animal.position.x + dx;
+            const ny = animal.position.y + dy;
+            if (tiles[ny]?.[nx]?.passable) animal.position = { x: nx, y: ny };
+          }
+        }
+
+        // Flee from character
+        if (animal.type !== 'wolf') {
+          const dist = Math.abs(animal.position.x - char.position.x) + Math.abs(animal.position.y - char.position.y);
+          if (dist <= 3 && Math.random() < 0.4) {
+            const dx = Math.sign(animal.position.x - char.position.x);
+            const dy = Math.sign(animal.position.y - char.position.y);
+            const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, animal.position.x + dx));
+            const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, animal.position.y + dy));
+            if (tiles[ny]?.[nx]?.passable) animal.position = { x: nx, y: ny };
+          }
+        }
+
+        // Despawn if hungry too long
+        if (animal.hunger <= 0) {
+          toRemove.push(animal.id);
+        }
+      } else if (animal.state === 'tamed' || animal.state === 'farm') {
+        // Tamed animals stay near home
+        const homeX = 10;
+        const homeY = 11;
+        const dist = Math.abs(animal.position.x - homeX) + Math.abs(animal.position.y - homeY);
+        if (dist > 5) {
+          const dx = Math.sign(homeX - animal.position.x);
+          const dy = Math.sign(homeY - animal.position.y);
+          const nx = animal.position.x + dx;
+          const ny = animal.position.y + dy;
+          if (tiles[ny]?.[nx]?.passable) animal.position = { x: nx, y: ny };
+        } else if (Math.random() < 0.1) {
+          // Small wander near home
+          const dx = Math.floor(Math.random() * 3) - 1;
+          const dy = Math.floor(Math.random() * 3) - 1;
+          const nx = Math.max(1, Math.min(WORLD_WIDTH - 2, animal.position.x + dx));
+          const ny = Math.max(1, Math.min(WORLD_HEIGHT - 2, animal.position.y + dy));
+          if (tiles[ny]?.[nx]?.passable) animal.position = { x: nx, y: ny };
+        }
+
+        // Produce resources
+        animal.produceTimer++;
+        if (animal.produceTimer >= 50) {
+          animal.produceTimer = 0;
+          if (animal.type === 'chicken') {
+            addToInventory(char, 'food', 2);
+            this._world.addEvent('animal', `🥚 ${animal.name || 'Курица'} снесла яйца!`);
+            this._callbacks.onNewEvent();
+          } else if (animal.type === 'cow') {
+            addToInventory(char, 'food', 3);
+            this._world.addEvent('animal', `🥛 ${animal.name || 'Корова'} дала молоко!`);
+            this._callbacks.onNewEvent();
+          } else if (animal.type === 'pig') {
+            addToInventory(char, 'food', 2);
+            this._world.addEvent('animal', `🐷 ${animal.name || 'Свинья'} нашла трюфели!`);
+            this._callbacks.onNewEvent();
+          }
+        }
+
+        // Tamed animals boost mood
+        char.emotions.loneliness = clamp(char.emotions.loneliness - 0.01, 0, 100);
+      }
+    }
+
+    for (const id of toRemove) {
+      this._world.removeAnimal(id);
+    }
+  }
+
+  private _resolveHunt(): void {
+    const char = this._world.character;
+    const wildAnimals = this._world.animals.filter(a => a.state === 'wild' && a.type !== 'wolf');
+
+    // Find nearest wild animal
+    let nearest: Animal | null = null;
+    let minDist = Infinity;
+    for (const a of wildAnimals) {
+      const d = Math.abs(a.position.x - char.position.x) + Math.abs(a.position.y - char.position.y);
+      if (d < minDist) { minDist = d; nearest = a; }
+    }
+
+    if (nearest && minDist <= 8) {
+      const success = Math.random() < 0.6;
+      if (success) {
+        addToInventory(char, 'meat', nearest.type === 'deer' ? 5 : 2);
+        addToInventory(char, 'leather', nearest.type === 'deer' ? 2 : 1);
+        const animalNames: Record<string, string> = {
+          rabbit: 'кролика', deer: 'оленя', chicken: 'курицу',
+        };
+        this._world.addEvent('animal', `🏹 ${char.name} поймал ${animalNames[nearest.type] || 'животное'}! (+мясо, +кожа)`);
+        this._world.removeAnimal(nearest.id);
+        char.emotions.pride = clamp(char.emotions.pride + 10, 0, 100);
+        this._callbacks.onNewEvent();
+        this._callbacks.onAnimalUpdate();
+      } else {
+        this._world.addEvent('animal', `${char.name} не смог поймать добычу.`);
+        this._callbacks.onNewEvent();
+      }
+    }
+
+    // Wolf hunting
+    const wolves = this._world.animals.filter(a => a.state === 'wild' && a.type === 'wolf');
+    if (wolves.length > 0) {
+      const wolf = wolves.find(w => Math.abs(w.position.x - char.position.x) + Math.abs(w.position.y - char.position.y) <= 5);
+      if (wolf && Math.random() < 0.4) {
+        addToInventory(char, 'meat', 3);
+        addToInventory(char, 'leather', 3);
+        this._world.addEvent('animal', `⚔️ ${char.name} победил волка! (+мясо, +кожа)`);
+        this._world.removeAnimal(wolf.id);
+        char.emotions.pride = clamp(char.emotions.pride + 20, 0, 100);
+        char.emotions.fear = 0;
+        this._callbacks.onNewEvent();
+        this._callbacks.onAnimalUpdate();
+      }
+    }
+  }
+
+  private _resolveTame(): void {
+    const char = this._world.character;
+    const wildAnimals = this._world.animals.filter(a => a.state === 'wild' && a.type !== 'wolf');
+
+    let nearest: Animal | null = null;
+    let minDist = Infinity;
+    for (const a of wildAnimals) {
+      const d = Math.abs(a.position.x - char.position.x) + Math.abs(a.position.y - char.position.y);
+      if (d < minDist) { minDist = d; nearest = a; }
+    }
+
+    if (nearest && getInventoryAmount(char, 'food') >= 3) {
+      // Consume food to tame
+      char.inventory.find(i => i.type === 'food')!.amount -= 3;
+      char.inventory = char.inventory.filter(i => i.amount > 0);
+
+      const chance = nearest.type === 'rabbit' ? 0.7 : nearest.type === 'chicken' ? 0.6 : nearest.type === 'deer' ? 0.3 : 0.1;
+      if (Math.random() < chance) {
+        nearest.state = 'tamed';
+        const animalNames: Record<string, string> = {
+          rabbit: 'Кролик', deer: 'Олень', chicken: 'Курица',
+          cow: 'Корова', pig: 'Свинья',
+        };
+        const petNames = ['Пушок', 'Звёздочка', 'Рыжик', 'Снежок', 'Умка', 'Белка', 'Мурка'];
+        nearest.name = petNames[Math.floor(Math.random() * petNames.length)];
+        this._world.addEvent('animal', `🎉 ${char.name} приручил ${animalNames[nearest.type] || 'животное'}! Имя: ${nearest.name}`);
+        char.emotions.excitement = clamp(char.emotions.excitement + 30, 0, 100);
+        char.needs.mood = clamp(char.needs.mood + 15, 0, 100);
+        this._callbacks.onNewEvent();
+        this._callbacks.onAnimalUpdate();
+      } else {
+        this._world.addEvent('animal', `${char.name} не смог приручить животное. Оно убежало.`);
+        this._callbacks.onNewEvent();
+      }
+    }
+  }
+
+  private _resolveFarm(): void {
+    const char = this._world.character;
+    const farmed = this._world.animals.filter(a => a.state === 'tamed' || a.state === 'farm');
+
+    for (const animal of farmed) {
+      animal.hunger = Math.min(100, animal.hunger + 20);
+      animal.state = 'farm';
+    }
+
+    if (farmed.length > 0) {
+      addToInventory(char, 'food', farmed.length);
+      this._world.addEvent('animal', `🌾 ${char.name} покормил ${farmed.length} животных и собрал продукты.`);
+      this._callbacks.onNewEvent();
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Emotions update
+  // ----------------------------------------------------------
+  private _updateAllEmotions(): void {
+    const char = this._world.character;
+    const npcs = this._world.npcs;
+    const hasCompanion = npcs.some(n => n.role === 'companion');
+    const hasChildren = npcs.some(n => n.role === 'child');
+    const animalCount = this._world.animals.filter(a => a.state === 'tamed' || a.state === 'farm').length;
+
+    updateEmotions(char, hasCompanion, hasChildren, animalCount);
+
+    // Emit emotion events occasionally
+    if (char.emotions.loneliness > 80 && Math.random() < 0.05) {
+      this._world.addEvent('emotion', `😔 ${char.name} чувствует себя одиноким...`);
+      this._callbacks.onNewEvent();
+    }
+    if (char.emotions.love > 80 && hasCompanion && Math.random() < 0.03) {
+      const comp = npcs.find(n => n.role === 'companion');
+      if (comp) {
+        this._world.addEvent('emotion', `❤️ ${char.name} нежно смотрит на ${comp.name}.`);
+        this._callbacks.onNewEvent();
+      }
+    }
+    if (char.emotions.pride > 80 && Math.random() < 0.02) {
+      this._world.addEvent('emotion', `💪 ${char.name} горд своими достижениями!`);
+      this._callbacks.onNewEvent();
+    }
+    if (char.emotions.fear > 50 && Math.random() < 0.05) {
+      this._world.addEvent('emotion', `😰 ${char.name} боится... Что-то рядом.`);
+      this._callbacks.onNewEvent();
+    }
+
+    // Update NPC emotions
+    for (const npc of npcs) {
+      if (!npc.emotions) {
+        npc.emotions = { love: 0, loneliness: 50, pride: 20, grief: 0, excitement: 30, fear: 0 };
+      }
+      const nearPartner = Math.abs(npc.position.x - char.position.x) + Math.abs(npc.position.y - char.position.y) <= 3;
+      const nearChildren = npcs.some(n => n.role === 'child' &&
+        Math.abs(n.position.x - npc.position.x) + Math.abs(n.position.y - npc.position.y) <= 3
+      );
+      updateNPCEmotions(npc, nearPartner, nearChildren);
+
+      // Companion emotional events
+      if (npc.role === 'companion' && npc.emotions.love > 70 && npc.emotions.excitement > 70 && Math.random() < 0.03) {
+        this._world.addEvent('emotion', `💕 ${npc.name} счастлива рядом с ${char.name}!`);
+        this._callbacks.onNewEvent();
+      }
+      if (npc.role === 'companion' && npc.emotions.loneliness > 70 && Math.random() < 0.04) {
+        this._world.addEvent('emotion', `😢 ${npc.name} скучает по ${char.name}...`);
+        this._callbacks.onNewEvent();
       }
     }
   }
@@ -505,7 +982,6 @@ export class Simulation {
   // ----------------------------------------------------------
   private _regenerateResources(): void {
     const tiles = this._world.tiles;
-    // Count current resources
     let trees = 0, stones = 0, bushes = 0;
     const grassTiles: { x: number; y: number }[] = [];
     for (let y = 0; y < tiles.length; y++) {
@@ -521,7 +997,6 @@ export class Simulation {
     }
     if (grassTiles.length === 0) return;
 
-    // Regrow: small chance each cycle, favoring scarce resources
     const regenChance = 0.03;
     for (const pos of grassTiles) {
       if (Math.random() > regenChance) continue;
@@ -551,48 +1026,52 @@ export class Simulation {
     const char = this._world.character;
     const npcs = this._world.npcs;
 
-    // Работники появляются когда homeLevel >= 3 и нет работников
     const workers = npcs.filter(n => n.role === 'worker');
     if (char.homeLevel >= 3 && workers.length < Math.min(char.homeLevel - 1, 5)) {
-      // Шанс появления работника
       if (Math.random() < 0.3) {
         const npc = createNPC('worker');
         this._world.addNPC(npc);
         this._world.addEvent('npc', `👷 К ${char.name} пришёл работник — ${npc.name}!`);
+        char.emotions.excitement = clamp(char.emotions.excitement + 20, 0, 100);
         this._callbacks.onNewEvent();
         this._callbacks.onNPCUpdate();
       }
     }
 
-    // Спутница появляется когда homeLevel >= 4 и нет спутницы
     const companions = npcs.filter(n => n.role === 'companion');
     if (char.homeLevel >= 4 && companions.length === 0) {
       if (Math.random() < 0.2) {
         const npc = createNPC('companion');
+        npc.emotions.love = 30;
+        npc.emotions.excitement = 60;
         this._world.addNPC(npc);
         this._world.addEvent('npc', `💕 На поляну пришла ${npc.name}!`);
+        char.emotions.excitement = clamp(char.emotions.excitement + 40, 0, 100);
+        char.emotions.loneliness = clamp(char.emotions.loneliness - 30, 0, 100);
         this._callbacks.onNewEvent();
         this._callbacks.onNPCUpdate();
       }
     }
 
-    // Ребёнок рождается если есть спутница и прошло 1000 тиков
     if (companions.length > 0) {
       const comp = companions[0];
       const children = npcs.filter(n => n.role === 'child');
-      if (comp.tickAge > 1000 && children.length < 3 && comp.relationship > 70) {
+      if (comp.tickAge > 1000 && children.length < 3 && comp.relationship > 70 && comp.emotions.love > 60) {
         if (Math.random() < 0.1) {
           const child = createNPC('child', [char.name, comp.id]);
           this._world.addNPC(child);
           this._world.addEvent('npc', `👶 У ${char.name} и ${comp.name} родился ребёнок — ${child.name}!`);
-          char.needs.mood = Math.min(100, char.needs.mood + 30);
+          char.needs.mood = clamp(char.needs.mood + 30, 0, 100);
+          char.emotions.love = clamp(char.emotions.love + 20, 0, 100);
+          char.emotions.pride = clamp(char.emotions.pride + 25, 0, 100);
+          comp.emotions.love = clamp(comp.emotions.love + 30, 0, 100);
           comp.relationship = Math.min(100, comp.relationship + 20);
           this._callbacks.onNewEvent();
           this._callbacks.onNPCUpdate();
         }
       }
-      // Increase companion relationship over time
       comp.relationship = Math.min(100, comp.relationship + 0.01);
+      comp.emotions.love = clamp(comp.emotions.love + 0.005, 0, 100);
     }
   }
 
@@ -621,9 +1100,8 @@ export class Simulation {
         this._world.addEvent('invention', `💡 ${char.name} изобрёл: ${inv.name} — ${inv.description}`);
         this._callbacks.onNewEvent();
         this._callbacks.onInvention(inv);
-
-        // Mood boost from creativity
-        char.needs.mood = Math.min(100, char.needs.mood + 15);
+        char.needs.mood = clamp(char.needs.mood + 15, 0, 100);
+        char.emotions.pride = clamp(char.emotions.pride + 15, 0, 100);
       }
     } catch (err) {
       console.error('[Simulation] Ошибка изобретения:', err);
@@ -678,6 +1156,12 @@ export class Simulation {
     message: string,
     onResponse: (response: string) => void
   ): void {
+    // Check if this is a command
+    const isCommand = this._isCommand(message);
+    if (isCommand) {
+      this.queueChatCommand(message);
+    }
+
     import('../ai/mind').then(({ generateChatResponse }) => {
       const char = this._world.character;
       const recentChat = this._world.getRecentChatRaw();
@@ -686,7 +1170,7 @@ export class Simulation {
       generateChatResponse(char, message, recentChat, recentEvents)
         .then(response => {
           onResponse(response);
-          char.needs.mood = Math.min(char.needs.mood + 5, 100);
+          char.needs.mood = clamp(char.needs.mood + 5, 0, 100);
           char.relationship = Math.min(char.relationship + 2, 100);
         })
         .catch(err => {
@@ -694,6 +1178,16 @@ export class Simulation {
           onResponse('...');
         });
     });
+  }
+
+  private _isCommand(msg: string): boolean {
+    const keywords = [
+      'иди', 'пройди', 'сходи', 'руби', 'собери', 'поешь', 'ешь', 'спи', 'отдохни',
+      'строй', 'охот', 'прируч', 'ферм', 'go', 'chop', 'eat', 'sleep', 'build', 'hunt', 'tame', 'farm',
+      'дом', 'домой', 'дерев', 'камн', 'ягод', 'еды', 'еда',
+    ];
+    const lower = msg.toLowerCase();
+    return keywords.some(k => lower.includes(k));
   }
 
   getWorld(): WorldManager {

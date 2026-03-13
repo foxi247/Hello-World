@@ -14,7 +14,19 @@ export interface CharacterNeeds {
   comfort: number;   // 0-100: 100 = комфортно, 0 = дискомфорт
 }
 
-export type ResourceType = 'wood' | 'stone' | 'food';
+// ============================================================
+// Emotions system
+// ============================================================
+export interface EmotionState {
+  love: number;        // 0-100: привязанность к партнёру
+  loneliness: number;  // 0-100: чувство одиночества
+  pride: number;       // 0-100: гордость за достижения
+  grief: number;       // 0-100: горе (если кто-то умер/ушёл)
+  excitement: number;  // 0-100: возбуждение/волнение
+  fear: number;        // 0-100: страх (от хищников)
+}
+
+export type ResourceType = 'wood' | 'stone' | 'food' | 'meat' | 'leather';
 
 export interface InventoryItem {
   type: ResourceType;
@@ -34,13 +46,19 @@ export type ActionType =
   | 'MOVE_TO'
   | 'INVENT'
   | 'CRAFT'
-  | 'MANAGE_NPC';
+  | 'MANAGE_NPC'
+  | 'HUNT'
+  | 'TAME'
+  | 'FARM'
+  | 'FISH'
+  | 'CHAT_COMMAND';
 
 export interface CharacterState {
   name: string;
   position: Position;
   targetPosition: Position | null;
   needs: CharacterNeeds;
+  emotions: EmotionState;
   inventory: InventoryItem[];
   currentAction: ActionType;
   actionProgress: number;      // 0-100
@@ -63,12 +81,44 @@ export interface NPCState {
   position: Position;
   targetPosition: Position | null;
   needs: CharacterNeeds;
+  emotions: EmotionState;
   currentAction: ActionType;
   actionProgress: number;
   currentTask: string;           // что делает сейчас
   relationship: number;          // отношение к Олдеру
   tickAge: number;               // возраст в тиках
   parentIds?: string[];          // для детей — id родителей
+  isFemale?: boolean;
+}
+
+// ============================================================
+// Animals
+// ============================================================
+export type AnimalType = 'rabbit' | 'deer' | 'wolf' | 'chicken' | 'cow' | 'pig';
+export type AnimalState = 'wild' | 'tamed' | 'farm';
+
+export interface Animal {
+  id: string;
+  type: AnimalType;
+  position: Position;
+  state: AnimalState;
+  health: number;        // 0-100
+  hunger: number;        // 0-100
+  name?: string;         // имя, если приручено
+  produceTimer: number;  // для фермы: когда следующая продукция
+}
+
+// ============================================================
+// Building construction
+// ============================================================
+export interface BuildingProject {
+  id: string;
+  type: string;            // wall, floor, fence, etc.
+  position: Position;
+  progress: number;        // 0-100
+  requiredWood: number;
+  requiredStone: number;
+  completed: boolean;
 }
 
 // ============================================================
@@ -97,7 +147,10 @@ export type TileType =
   | 'FLOOR'
   | 'WORKSHOP'
   | 'GARDEN'
-  | 'FENCE';
+  | 'FENCE'
+  | 'FARM_PLOT'
+  | 'ANIMAL_PEN'
+  | 'CONSTRUCTION';
 
 export interface WorldTile {
   type: TileType;
@@ -105,12 +158,14 @@ export interface WorldTile {
   y: number;
   resource: number;   // запас ресурса (для деревьев, камней, кустов)
   passable: boolean;
+  buildProgress?: number;  // 0-100 для строящихся тайлов
+  targetType?: TileType;   // что будет построено
 }
 
 export interface GameEvent {
   id: string;
   tick: number;
-  type: 'action' | 'thought' | 'chat_in' | 'chat_out' | 'system' | 'build' | 'invention' | 'npc';
+  type: 'action' | 'thought' | 'chat_in' | 'chat_out' | 'system' | 'build' | 'invention' | 'npc' | 'animal' | 'emotion';
   message: string;
   timestamp: number;
 }
@@ -128,6 +183,7 @@ export interface WorldState {
   tiles: WorldTile[][];    // [row][col]
   character: CharacterState;
   npcs: NPCState[];
+  animals: Animal[];
   inventions: Invention[];
   tick: number;
   dayPhase: 'dawn' | 'day' | 'dusk' | 'night';
@@ -143,6 +199,7 @@ export type WSServerMessage =
   | { type: 'FULL_STATE';      payload: WorldState }
   | { type: 'CHARACTER_UPDATE'; payload: CharacterState }
   | { type: 'NPC_UPDATE';      payload: NPCState[] }
+  | { type: 'ANIMAL_UPDATE';   payload: Animal[] }
   | { type: 'TILE_UPDATE';     payload: { x: number; y: number; tile: WorldTile } }
   | { type: 'NEW_EVENT';       payload: GameEvent }
   | { type: 'CHAT_RESPONSE';   payload: ChatMessage }

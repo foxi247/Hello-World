@@ -5,7 +5,7 @@ import { StatusPanel } from './components/StatusPanel';
 import { EventLog } from './components/EventLog';
 import { ThoughtBubble } from './components/ThoughtBubble';
 import { useWebSocket } from './hooks/useWebSocket';
-import type { CharacterState, NPCState, Invention } from './types';
+import type { CharacterState, NPCState, Invention, Animal } from './types';
 
 const TILE_SIZE = 32;
 const WORLD_W = 20;
@@ -20,6 +20,7 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [character, setCharacter] = useState<CharacterState | null>(null);
   const [npcs, setNPCs] = useState<NPCState[]>([]);
+  const [animals, setAnimals] = useState<Animal[]>([]);
   const [inventions, setInventions] = useState<Invention[]>([]);
 
   const handleCharacterUpdate = useCallback((char: CharacterState) => {
@@ -51,6 +52,11 @@ export default function App() {
     setInventions(prev => [...prev, inv]);
   }, []);
 
+  const handleAnimalUpdate = useCallback((newAnimals: Animal[]) => {
+    setAnimals(newAnimals);
+    phaserRef.current?.updateAnimals(newAnimals);
+  }, []);
+
   const { worldState, connected, recentEvents, chatHistory, sendMessage } =
     useWebSocket(
       handleCharacterUpdate,
@@ -58,7 +64,8 @@ export default function App() {
       handleThought,
       handleDayPhase,
       handleNPCUpdate,
-      handleInvention
+      handleInvention,
+      handleAnimalUpdate
     );
 
   const worldStateRef = useRef<typeof worldState>(null);
@@ -70,6 +77,7 @@ export default function App() {
       setTick(worldState.tick);
       setDayPhase(worldState.dayPhase);
       if (worldState.npcs) setNPCs(worldState.npcs);
+      if (worldState.animals) setAnimals(worldState.animals);
       if (worldState.inventions) setInventions(worldState.inventions);
     }, 100);
   }
@@ -87,69 +95,85 @@ export default function App() {
     night: 'Ночь',
   };
 
+  const tamedAnimals = animals.filter(a => a.state === 'tamed' || a.state === 'farm');
+  const wildAnimals = animals.filter(a => a.state === 'wild');
+
   return (
     <div style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100vh',
-      overflow: 'hidden',
+      overflow: 'auto',
+      WebkitOverflowScrolling: 'touch',
       background: '#0d0d0d',
       color: '#cccccc',
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      padding: 16,
-      gap: 12,
+      padding: 'clamp(8px, 2vw, 16px)',
+      gap: 10,
       boxSizing: 'border-box',
     }}>
       {/* Заголовок */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 12,
-        paddingBottom: 8,
+        gap: 8,
+        paddingBottom: 6,
         borderBottom: '1px solid #222',
+        flexWrap: 'wrap',
       }}>
-        <span style={{ fontSize: 20 }}>🌿</span>
-        <span style={{ fontSize: 16, fontWeight: 'bold', color: '#aaddaa' }}>
+        <span style={{ fontSize: 18 }}>🌿</span>
+        <span style={{ fontSize: 14, fontWeight: 'bold', color: '#aaddaa' }}>
           Мир Олдера
         </span>
-        <span style={{ fontSize: 11, color: '#556655', marginLeft: 4 }}>
+        <span style={{ fontSize: 10, color: '#556655' }}>
           Тихая жизнь в лесу
         </span>
         {npcs.length > 0 && (
-          <span style={{ fontSize: 11, color: '#88aa88', marginLeft: 8 }}>
-            👥 {npcs.length} {npcs.length === 1 ? 'житель' : 'жителей'}
+          <span style={{ fontSize: 10, color: '#88aa88' }}>
+            👥{npcs.length}
+          </span>
+        )}
+        {animals.length > 0 && (
+          <span style={{ fontSize: 10, color: '#aa8844' }}>
+            🐾{tamedAnimals.length}/{animals.length}
           </span>
         )}
         {inventions.length > 0 && (
-          <span style={{ fontSize: 11, color: '#aaaa44', marginLeft: 8 }}>
-            💡 {inventions.length} {inventions.length === 1 ? 'изобретение' : 'изобретений'}
+          <span style={{ fontSize: 10, color: '#aaaa44' }}>
+            💡{inventions.length}
           </span>
         )}
         {!connected && (
           <span style={{
             marginLeft: 'auto',
-            fontSize: 11,
+            fontSize: 10,
             color: '#cc4444',
             background: '#2a1010',
             border: '1px solid #441111',
-            padding: '3px 8px',
+            padding: '2px 6px',
             borderRadius: 4,
           }}>
-            Подключение к серверу...
+            Подключение...
           </span>
         )}
       </div>
 
-      {/* Основной layout */}
+      {/* Основной layout — responsive */}
       <div style={{
         display: 'flex',
-        gap: 12,
+        gap: 10,
         flex: 1,
         minHeight: 0,
-        alignItems: 'flex-start',
+        flexWrap: 'wrap',
       }}>
         {/* Лево: игра + мысль + лог */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          flex: '1 1 400px',
+          minWidth: 0,
+        }}>
           <PhaserGame ref={phaserRef} width={GAME_W} height={GAME_H} />
 
           <ThoughtBubble
@@ -160,14 +184,15 @@ export default function App() {
           <EventLog events={recentEvents} />
         </div>
 
-        {/* Право: статус + чат */}
+        {/* Право: статус + панели + чат */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 12,
-          width: 260,
-          flexShrink: 0,
-          height: GAME_H + 12 + 50 + 12 + 120,
+          gap: 10,
+          flex: '0 0 auto',
+          width: 'clamp(200px, 25vw, 260px)',
+          maxHeight: 'calc(100vh - 80px)',
+          overflowY: 'auto',
         }}>
           <StatusPanel
             character={char}
@@ -175,7 +200,41 @@ export default function App() {
             tick={tick}
           />
 
-          {/* NPC панель если есть */}
+          {/* Эмоции */}
+          {char?.emotions && (
+            <div style={{
+              background: '#141414',
+              border: '1px solid #2a2a3a',
+              borderRadius: 8,
+              padding: '8px 10px',
+            }}>
+              <div style={{ fontSize: 11, color: '#cc88cc', fontWeight: 'bold', marginBottom: 6 }}>
+                💜 Чувства
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {char.emotions.love > 10 && (
+                  <EmotionBadge icon="❤" label="Любовь" value={char.emotions.love} color="#ff4466" />
+                )}
+                {char.emotions.loneliness > 20 && (
+                  <EmotionBadge icon="😔" label="Одиночество" value={char.emotions.loneliness} color="#6688cc" />
+                )}
+                {char.emotions.pride > 20 && (
+                  <EmotionBadge icon="💪" label="Гордость" value={char.emotions.pride} color="#ffaa44" />
+                )}
+                {char.emotions.grief > 10 && (
+                  <EmotionBadge icon="😢" label="Горе" value={char.emotions.grief} color="#8888cc" />
+                )}
+                {char.emotions.excitement > 20 && (
+                  <EmotionBadge icon="✨" label="Волнение" value={char.emotions.excitement} color="#ffdd44" />
+                )}
+                {char.emotions.fear > 10 && (
+                  <EmotionBadge icon="😰" label="Страх" value={char.emotions.fear} color="#cc4444" />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* NPC панель */}
           {npcs.length > 0 && (
             <div style={{
               background: '#141414',
@@ -193,25 +252,52 @@ export default function App() {
                   padding: '2px 0',
                   display: 'flex',
                   justifyContent: 'space-between',
+                  gap: 4,
                 }}>
-                  <span>
+                  <span style={{ whiteSpace: 'nowrap' }}>
                     {npc.role === 'worker' ? '⛏' : npc.role === 'companion' ? '♥' : '★'}{' '}
                     {npc.name}
                   </span>
-                  <span style={{ color: '#668866' }}>{npc.currentTask}</span>
+                  <span style={{ color: '#668866', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {npc.currentTask}
+                  </span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Изобретения если есть */}
+          {/* Животные панель */}
+          {animals.length > 0 && (
+            <div style={{
+              background: '#141414',
+              border: '1px solid #3a2a1a',
+              borderRadius: 8,
+              padding: '8px 10px',
+            }}>
+              <div style={{ fontSize: 11, color: '#ccaa66', fontWeight: 'bold', marginBottom: 6 }}>
+                🐾 Животные ({animals.length})
+              </div>
+              {tamedAnimals.map(a => (
+                <div key={a.id} style={{ fontSize: 10, color: '#aaccaa', padding: '1px 0' }}>
+                  {animalEmoji(a.type)} {a.name || a.type} <span style={{ color: '#668866' }}>— ферма</span>
+                </div>
+              ))}
+              {wildAnimals.length > 0 && (
+                <div style={{ fontSize: 10, color: '#ccaaaa', marginTop: 3 }}>
+                  🌲 Дикие: {wildAnimals.map(a => animalEmoji(a.type)).join(' ')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Изобретения */}
           {inventions.length > 0 && (
             <div style={{
               background: '#141414',
               border: '1px solid #3a3a1a',
               borderRadius: 8,
               padding: '8px 10px',
-              maxHeight: 100,
+              maxHeight: 80,
               overflowY: 'auto',
             }}>
               <div style={{ fontSize: 11, color: '#cccc44', fontWeight: 'bold', marginBottom: 6 }}>
@@ -221,11 +307,9 @@ export default function App() {
                 <div key={inv.id} style={{
                   fontSize: 10,
                   color: '#aaaa88',
-                  padding: '2px 0',
+                  padding: '1px 0',
                 }}>
                   <span style={{ color: '#cccc66' }}>{inv.name}</span>
-                  {' — '}
-                  <span>{inv.description}</span>
                 </div>
               ))}
             </div>
@@ -241,14 +325,42 @@ export default function App() {
 
       {/* Футер */}
       <div style={{
-        fontSize: 10,
+        fontSize: 9,
         color: '#333',
         textAlign: 'center',
-        paddingTop: 8,
+        paddingTop: 6,
         borderTop: '1px solid #181818',
+        flexShrink: 0,
       }}>
-        Мозг: Mistral · Хранение: SQLite · Тик: {tick} · {dayPhaseRu[dayPhase] || dayPhase}
+        Тик: {tick} · {dayPhaseRu[dayPhase] || dayPhase} · 🐾{animals.length}
       </div>
     </div>
   );
+}
+
+function EmotionBadge({ icon, label, value, color }: { icon: string; label: string; value: number; color: string }) {
+  return (
+    <div title={`${label}: ${Math.round(value)}`} style={{
+      background: '#1a1a2a',
+      border: `1px solid ${color}33`,
+      borderRadius: 4,
+      padding: '2px 5px',
+      fontSize: 10,
+      color,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 3,
+    }}>
+      <span>{icon}</span>
+      <span style={{ fontFamily: 'monospace', fontSize: 9 }}>{Math.round(value)}</span>
+    </div>
+  );
+}
+
+function animalEmoji(type: string): string {
+  const map: Record<string, string> = {
+    rabbit: '🐰', deer: '🦌', wolf: '🐺',
+    chicken: '🐔', cow: '🐄', pig: '🐷',
+  };
+  return map[type] || '🐾';
 }

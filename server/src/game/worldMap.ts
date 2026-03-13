@@ -44,6 +44,8 @@ const TILE_CONFIG: Record<string, { type: TileType; passable: boolean; resource:
   X:  { type: 'CHEST', passable: true, resource: 0 },
   '#': { type: 'WALL', passable: false, resource: 0 },
   F:  { type: 'FLOOR', passable: true, resource: 0 },
+  P:  { type: 'FARM_PLOT', passable: true, resource: 0 },
+  A:  { type: 'ANIMAL_PEN', passable: true, resource: 0 },
 };
 
 // ============================================================

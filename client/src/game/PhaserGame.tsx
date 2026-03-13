@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import Phaser from 'phaser';
 import { WorldScene } from './scenes/WorldScene';
-import type { WorldState, CharacterState, NPCState } from '../types';
+import type { WorldState, CharacterState, NPCState, Animal } from '../types';
 
 // ============================================================
 // Exposed ref API
@@ -13,6 +13,7 @@ export interface PhaserGameRef {
   updateDayPhase: (phase: string, progress: number) => void;
   showThought: (thought: string) => void;
   updateNPCs: (npcs: NPCState[]) => void;
+  updateAnimals: (animals: Animal[]) => void;
 }
 
 interface Props {
@@ -52,6 +53,9 @@ const PhaserGame = forwardRef<PhaserGameRef, Props>(({ width, height }, ref) => 
     updateNPCs(npcs: NPCState[]) {
       sceneRef.current?.updateNPCs(npcs);
     },
+    updateAnimals(animals: Animal[]) {
+      sceneRef.current?.updateAnimals(animals);
+    },
   }));
 
   useEffect(() => {
@@ -68,6 +72,10 @@ const PhaserGame = forwardRef<PhaserGameRef, Props>(({ width, height }, ref) => 
         pixelArt: false,
         antialias: true,
         roundPixels: true,
+      },
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
       },
     };
 
@@ -91,8 +99,9 @@ const PhaserGame = forwardRef<PhaserGameRef, Props>(({ width, height }, ref) => 
     <div
       ref={containerRef}
       style={{
-        width: gameWidth,
-        height: gameHeight,
+        width: '100%',
+        maxWidth: gameWidth,
+        aspectRatio: `${gameWidth} / ${gameHeight}`,
         borderRadius: '8px',
         overflow: 'hidden',
         boxShadow: '0 4px 20px rgba(0,0,0,0.5)',

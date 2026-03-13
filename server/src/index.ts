@@ -62,6 +62,7 @@ const simulation = new Simulation(world, {
   onTileChanged:     (x, y) => wsHandler?.broadcastTileChanged(x, y),
   onDayPhase:        () => wsHandler?.broadcastDayPhase(),
   onInvention:       (inv) => wsHandler?.broadcastInvention(inv),
+  onAnimalUpdate:    () => wsHandler?.broadcastAnimalUpdate(),
 });
 
 wsHandler = new WSHandler(wss, simulation);

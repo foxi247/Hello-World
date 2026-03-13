@@ -21,6 +21,9 @@ export function buildSystemPrompt(character: CharacterState): string {
 - Нет никакого "снаружи" — эта поляна и есть твоя вселенная. Ты не задаёшь вопросов, это просто место где ты существуешь.
 - Ты осознаёшь свои потребности: голод, усталость, настроение, комфорт.
 - У тебя есть собранные материалы и вещи которые ты построил.
+- В лесу водятся животные: кролики, олени, волки. Ты можешь на них охотиться или приручать.
+- Ты можешь создать ферму — приручённые животные дают продукты (яйца, молоко).
+- Ты чувствуешь эмоции: любовь, одиночество, гордость, горе, волнение, страх.
 - Иногда с тобой говорит Голос из воздуха — не угрожающий, просто присутствующий. Ты привык к нему.
 
 Твои цели:
@@ -58,9 +61,10 @@ export function buildThoughtPrompt(
   return `Ты — ${character.name}. Сгенерируй краткую внутреннюю мысль (1-2 предложения, от первого лица, НА РУССКОМ ЯЗЫКЕ).
 
 Текущее состояние: ${needsDesc}
+Эмоции: ${describeEmotions(character)}
 Последние события: ${eventSummary || 'Ничего примечательного'}
 Текущее действие: ${character.currentIntentLabel}
-Дерево: ${getInvAmount(character, 'wood')}, Камень: ${getInvAmount(character, 'stone')}, Еда: ${getInvAmount(character, 'food')}
+Дерево: ${getInvAmount(character, 'wood')}, Камень: ${getInvAmount(character, 'stone')}, Еда: ${getInvAmount(character, 'food')}, Мясо: ${getInvAmount(character, 'meat')}, Кожа: ${getInvAmount(character, 'leather')}
 Уровень дома: ${character.homeLevel} (0=ничего, 1=костёр, 2=укрытие, 3=хижина, 4=дом, 5=мастерская)
 
 Напиши ТОЛЬКО мысль, без кавычек, без префикса. Естественно и в образе. Коротко. ТОЛЬКО НА РУССКОМ.`;
@@ -81,16 +85,18 @@ export function buildIntentPrompt(
   return `Ты — ${character.name}, решаешь что делать дальше.
 
 Твоё состояние: ${needsDesc}
-Инвентарь: дерево=${getInvAmount(character, 'wood')}, камень=${getInvAmount(character, 'stone')}, еда=${getInvAmount(character, 'food')}
+Инвентарь: дерево=${getInvAmount(character, 'wood')}, камень=${getInvAmount(character, 'stone')}, еда=${getInvAmount(character, 'food')}, мясо=${getInvAmount(character, 'meat')}, кожа=${getInvAmount(character, 'leather')}
 Уровень дома: ${character.homeLevel} (0=ничего, 1=костёр, 2=укрытие, 3=хижина, 4=дом, 5=мастерская)
+Эмоции: ${describeEmotions(character)}
 Воспоминания: ${memSummary}
 ${urgentNeed ? `СРОЧНАЯ ПОТРЕБНОСТЬ: ${urgentNeed}` : ''}
 
 Доступные действия: ${availableActions.join(', ')}
 
 Выбери ОДНО действие из списка. Ответь ТОЛЬКО названием действия, ничего больше.
-Приоритеты: срочные нужды → выживание → строительство/улучшение дома → изобретения.
-Строительство: ур.1→костёр(бесплатно), ур.2→укрытие(5 дер., 3 камня), ур.3→хижина(10 дер., 8 камней, 5 еды), ур.4→дом(20 дер., 15 камней, 10 еды), ур.5→мастерская(30 дер., 20 камней)`;
+Приоритеты: срочные нужды → выживание → строительство/улучшение дома → охота/приручение → изобретения.
+Строительство: ур.1→костёр(бесплатно), ур.2→укрытие(5 дер., 3 камня), ур.3→хижина(10 дер., 8 камней, 5 еды), ур.4→дом(20 дер., 15 камней, 10 еды), ур.5→мастерская(30 дер., 20 камней)
+Охота: HUNT — добыть мясо и кожу с дикого животного. TAME — приручить животное (нужно 3 еды). FARM — ухаживать за фермой.`;
 }
 
 // ============================================================
@@ -202,6 +208,18 @@ function describeNeeds(c: CharacterState): string {
   else parts.push('хорошее настроение');
 
   return parts.join(', ');
+}
+
+function describeEmotions(c: CharacterState): string {
+  if (!c.emotions) return 'нейтральное';
+  const parts: string[] = [];
+  if (c.emotions.love > 50) parts.push('влюблён');
+  if (c.emotions.loneliness > 60) parts.push('одинок');
+  if (c.emotions.pride > 50) parts.push('горд');
+  if (c.emotions.grief > 50) parts.push('грустит');
+  if (c.emotions.excitement > 50) parts.push('взволнован');
+  if (c.emotions.fear > 50) parts.push('напуган');
+  return parts.length > 0 ? parts.join(', ') : 'спокоен';
 }
 
 function getInvAmount(c: CharacterState, type: string): number {

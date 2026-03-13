@@ -4,9 +4,17 @@ import type {
   ResourceType,
   NPCState,
   NPCRole,
+  EmotionState,
 } from '../../../shared/types';
 import { CHARACTER_START } from './worldMap';
 import { v4 as uuidv4 } from 'uuid';
+
+// ============================================================
+// Default emotions
+// ============================================================
+export function createEmotions(): EmotionState {
+  return { love: 0, loneliness: 50, pride: 20, grief: 0, excitement: 30, fear: 0 };
+}
 
 // ============================================================
 // Начальное состояние персонажа
@@ -22,6 +30,7 @@ export function createCharacter(): CharacterState {
       mood: 70,
       comfort: 60,
     },
+    emotions: createEmotions(),
     inventory: [],
     currentAction: 'IDLE',
     actionProgress: 0,
@@ -48,6 +57,7 @@ export function createNPC(role: NPCRole, parentIds?: string[]): NPCState {
     id: uuidv4(),
     name,
     role,
+    isFemale,
     position: { x: CHARACTER_START.x + Math.floor(Math.random() * 3) - 1, y: CHARACTER_START.y + Math.floor(Math.random() * 3) - 1 },
     targetPosition: null,
     needs: {
@@ -56,6 +66,7 @@ export function createNPC(role: NPCRole, parentIds?: string[]): NPCState {
       mood: 70,
       comfort: 50,
     },
+    emotions: createEmotions(),
     currentAction: 'IDLE',
     actionProgress: 0,
     currentTask: role === 'worker' ? 'ждёт указаний' : role === 'companion' ? 'обживается' : 'играет',
@@ -83,6 +94,80 @@ export function decayNeeds(char: CharacterState): void {
   char.needs.mood = clamp(char.needs.mood + (moodTarget - char.needs.mood) * 0.01, 0, 100);
 
   char.tickAge++;
+}
+
+// ============================================================
+// Emotion updates
+// ============================================================
+export function updateEmotions(char: CharacterState, hasCompanion: boolean, hasChildren: boolean, animalCount: number): void {
+  // Loneliness
+  if (hasCompanion) {
+    char.emotions.loneliness = clamp(char.emotions.loneliness - 0.1, 0, 100);
+  } else {
+    char.emotions.loneliness = clamp(char.emotions.loneliness + 0.02, 0, 100);
+  }
+  if (hasChildren) {
+    char.emotions.loneliness = clamp(char.emotions.loneliness - 0.05, 0, 100);
+  }
+  if (animalCount > 0) {
+    char.emotions.loneliness = clamp(char.emotions.loneliness - 0.02 * animalCount, 0, 100);
+  }
+
+  // Pride from home level
+  const prideTarget = char.homeLevel * 15 + char.tickAge * 0.001;
+  char.emotions.pride = clamp(char.emotions.pride + (prideTarget - char.emotions.pride) * 0.005, 0, 100);
+
+  // Love grows with companion
+  if (hasCompanion) {
+    char.emotions.love = clamp(char.emotions.love + 0.01, 0, 100);
+  }
+
+  // Grief decays slowly
+  char.emotions.grief = clamp(char.emotions.grief - 0.005, 0, 100);
+
+  // Excitement from events (set externally)
+  char.emotions.excitement = clamp(char.emotions.excitement - 0.02, 0, 100);
+
+  // Fear decays
+  char.emotions.fear = clamp(char.emotions.fear - 0.03, 0, 100);
+
+  // Emotions affect mood
+  char.needs.mood = clamp(
+    char.needs.mood
+    + char.emotions.love * 0.001
+    - char.emotions.loneliness * 0.002
+    - char.emotions.grief * 0.003
+    - char.emotions.fear * 0.002
+    + char.emotions.pride * 0.001,
+    0, 100
+  );
+}
+
+// ============================================================
+// NPC Emotion updates
+// ============================================================
+export function updateNPCEmotions(npc: NPCState, nearPartner: boolean, nearChildren: boolean): void {
+  if (npc.role === 'companion') {
+    if (nearPartner) {
+      npc.emotions.love = clamp(npc.emotions.love + 0.02, 0, 100);
+      npc.emotions.loneliness = clamp(npc.emotions.loneliness - 0.05, 0, 100);
+    } else {
+      npc.emotions.loneliness = clamp(npc.emotions.loneliness + 0.03, 0, 100);
+    }
+    // Excitement fluctuates
+    if (npc.emotions.love > 70 && nearPartner) {
+      npc.emotions.excitement = clamp(npc.emotions.excitement + 0.05, 0, 100);
+    } else {
+      npc.emotions.excitement = clamp(npc.emotions.excitement - 0.02, 0, 100);
+    }
+  }
+
+  if (npc.role === 'child') {
+    npc.emotions.excitement = clamp(npc.emotions.excitement + (Math.random() > 0.5 ? 0.03 : -0.02), 0, 100);
+  }
+
+  npc.emotions.grief = clamp(npc.emotions.grief - 0.005, 0, 100);
+  npc.emotions.fear = clamp(npc.emotions.fear - 0.03, 0, 100);
 }
 
 // ============================================================
@@ -155,7 +240,7 @@ export function getAvailableActions(char: CharacterState): ActionType[] {
 
   actions.push('COLLECT_FOOD', 'COLLECT_WOOD', 'COLLECT_STONE');
 
-  if (getInventoryAmount(char, 'food') > 0) {
+  if (getInventoryAmount(char, 'food') > 0 || getInventoryAmount(char, 'meat') > 0) {
     actions.push('EAT');
   }
 
@@ -165,6 +250,19 @@ export function getAvailableActions(char: CharacterState): ActionType[] {
 
   if (canBuild(char)) {
     actions.push('BUILD');
+  }
+
+  // Hunting
+  actions.push('HUNT');
+
+  // Taming (if has food)
+  if (getInventoryAmount(char, 'food') >= 3) {
+    actions.push('TAME');
+  }
+
+  // Farming (if has farm plots)
+  if (char.homeLevel >= 3) {
+    actions.push('FARM');
   }
 
   // Изобретать можно если сыт, бодрый и в хорошем настроении
@@ -193,6 +291,12 @@ export function canBuild(char: CharacterState): boolean {
 // Еда
 // ============================================================
 export function eatFood(char: CharacterState): boolean {
+  // Try meat first (more nutritious)
+  if (consumeFromInventory(char, 'meat', 1)) {
+    char.needs.hunger = clamp(char.needs.hunger + 35, 0, 100);
+    char.needs.mood   = clamp(char.needs.mood + 12, 0, 100);
+    return true;
+  }
   if (!consumeFromInventory(char, 'food', 1)) return false;
   char.needs.hunger = clamp(char.needs.hunger + 25, 0, 100);
   char.needs.mood   = clamp(char.needs.mood + 10, 0, 100);
@@ -214,6 +318,7 @@ export function applyBuild(char: CharacterState): string {
     consumeFromInventory(char, 'stone', 3);
     char.homeLevel = 2;
     char.needs.comfort = clamp(char.needs.comfort + 20, 0, 100);
+    char.emotions.pride = clamp(char.emotions.pride + 15, 0, 100);
     return '🏕️ Построил укрытие — наконец-то настоящая крыша!';
   }
   if (level === 2) {
@@ -222,6 +327,7 @@ export function applyBuild(char: CharacterState): string {
     consumeFromInventory(char, 'food', 5);
     char.homeLevel = 3;
     char.needs.comfort = clamp(char.needs.comfort + 30, 0, 100);
+    char.emotions.pride = clamp(char.emotions.pride + 20, 0, 100);
     return '🏠 Достроил хижину — теперь это настоящий дом!';
   }
   if (level === 3) {
@@ -230,6 +336,7 @@ export function applyBuild(char: CharacterState): string {
     consumeFromInventory(char, 'food', 10);
     char.homeLevel = 4;
     char.needs.comfort = clamp(char.needs.comfort + 30, 0, 100);
+    char.emotions.pride = clamp(char.emotions.pride + 25, 0, 100);
     return '🏡 Построил дом — крепкие стены и тёплый очаг! Теперь можно принять гостей.';
   }
   if (level === 4) {
@@ -237,6 +344,7 @@ export function applyBuild(char: CharacterState): string {
     consumeFromInventory(char, 'stone', 20);
     char.homeLevel = 5;
     char.needs.comfort = clamp(char.needs.comfort + 20, 0, 100);
+    char.emotions.pride = clamp(char.emotions.pride + 30, 0, 100);
     return '⚒️ Построил мастерскую — теперь можно изобретать и мастерить!';
   }
 

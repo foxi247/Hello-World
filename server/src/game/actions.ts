@@ -43,14 +43,14 @@ export function startAction(
       const trees = findTilesOfType(tiles, 'TREE', char.position);
       const adj = trees.map(t => findAdjacentPassable(tiles, t)).find(Boolean);
       char.targetPosition = adj ?? char.position;
-      char.currentIntentLabel = 'ищет дерево';
+      char.currentIntentLabel = 'рубит дерево';
       return { eventMessage: `${char.name} направился к деревьям.` };
     }
     case 'COLLECT_STONE': {
       const stones = findTilesOfType(tiles, 'STONE', char.position);
       const adj = stones.map(t => findAdjacentPassable(tiles, t)).find(Boolean);
       char.targetPosition = adj ?? char.position;
-      char.currentIntentLabel = 'ищет камни';
+      char.currentIntentLabel = 'добывает камень';
       return { eventMessage: `${char.name} ищет камни.` };
     }
     case 'COLLECT_FOOD': {
@@ -67,7 +67,7 @@ export function startAction(
     }
     case 'REST': {
       char.targetPosition = { ...HOME_TILES.bed };
-      char.currentIntentLabel = 'отдыхает';
+      char.currentIntentLabel = 'ложится спать';
       return { eventMessage: `${char.name} пошёл отдыхать.` };
     }
     case 'BUILD': {
@@ -94,6 +94,25 @@ export function startAction(
       char.targetPosition = null;
       char.currentIntentLabel = 'управляет';
       return { eventMessage: `${char.name} раздаёт указания.` };
+    }
+    case 'HUNT': {
+      char.targetPosition = randomPassableTile(tiles, char.position, 8);
+      char.currentIntentLabel = 'охотится';
+      return { eventMessage: `${char.name} вышел на охоту.` };
+    }
+    case 'TAME': {
+      char.targetPosition = null;
+      char.currentIntentLabel = 'приручает';
+      return { eventMessage: `${char.name} пытается приручить животное.` };
+    }
+    case 'FARM': {
+      char.targetPosition = null;
+      char.currentIntentLabel = 'ухаживает за фермой';
+      return { eventMessage: `${char.name} занялся фермой.` };
+    }
+    case 'CHAT_COMMAND': {
+      char.currentIntentLabel = 'выполняет просьбу';
+      return { eventMessage: `${char.name} слушает Голос.` };
     }
     default: {
       char.targetPosition = null;
@@ -209,8 +228,14 @@ function executeAtTarget(
     }
 
     case 'BUILD': {
-      const msg = applyBuild(char);
-      return { completed: true, eventMessage: msg };
+      // Multi-step building: progress over several ticks
+      char.actionProgress += 8;
+      if (char.actionProgress >= 100) {
+        const msg = applyBuild(char);
+        return { completed: true, eventMessage: msg };
+      }
+      char.currentIntentLabel = `строит (${char.actionProgress}%)`;
+      return { completed: false };
     }
 
     case 'THINK': {
@@ -243,6 +268,38 @@ function executeAtTarget(
         return { completed: true, eventMessage: `${char.name} раздал указания.` };
       }
       return { completed: false };
+    }
+
+    case 'HUNT': {
+      char.actionProgress += 8;
+      char.currentIntentLabel = `охотится (${char.actionProgress}%)`;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} закончил охоту.` };
+      }
+      return { completed: false };
+    }
+
+    case 'TAME': {
+      char.actionProgress += 5;
+      char.currentIntentLabel = `приручает (${char.actionProgress}%)`;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} попытался приручить животное.` };
+      }
+      return { completed: false };
+    }
+
+    case 'FARM': {
+      char.actionProgress += 10;
+      char.currentIntentLabel = `фермерство (${char.actionProgress}%)`;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} поухаживал за фермой.` };
+      }
+      return { completed: false };
+    }
+
+    case 'CHAT_COMMAND': {
+      // Executed externally
+      return { completed: true, eventMessage: `${char.name} выполнил просьбу.` };
     }
 
     default:
@@ -344,13 +401,13 @@ function findAdjacentResource(
 // ============================================================
 function randomPassableTile(
   tiles: WorldTile[][],
-  near: { x: number; y: number }
+  near: { x: number; y: number },
+  radius = 5
 ): { x: number; y: number } {
   const candidates: Array<{ x: number; y: number }> = [];
-  const RADIUS = 5;
 
-  for (let dy = -RADIUS; dy <= RADIUS; dy++) {
-    for (let dx = -RADIUS; dx <= RADIUS; dx++) {
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
       const nx = near.x + dx;
       const ny = near.y + dy;
       if (

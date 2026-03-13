@@ -165,6 +165,13 @@ export class WSHandler {
     });
   }
 
+  broadcastAnimalUpdate(): void {
+    this._broadcast({
+      type: 'ANIMAL_UPDATE',
+      payload: this._world.animals,
+    });
+  }
+
   broadcastInvention(invention: import('../../../shared/types').Invention): void {
     this._broadcast({ type: 'INVENTION', payload: invention });
   }

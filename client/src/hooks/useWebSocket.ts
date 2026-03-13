@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import type { WSServerMessage, WSClientMessage, WorldState, CharacterState, GameEvent, ChatMessage, NPCState, Invention } from '../types';
+import type { WSServerMessage, WSClientMessage, WorldState, CharacterState, GameEvent, ChatMessage, NPCState, Invention, Animal } from '../types';
 
 // Подключаемся к тому же хосту и порту что и сам сайт (работает через туннель)
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -20,6 +20,7 @@ export function useWebSocket(
   onDayPhase: (phase: string, progress: number) => void,
   onNPCUpdate?: (npcs: NPCState[]) => void,
   onInvention?: (inv: Invention) => void,
+  onAnimalUpdate?: (animals: Animal[]) => void,
 ) {
   const [worldState, setWorldState] = useState<WorldState | null>(null);
   const [connected, setConnected] = useState(false);
@@ -132,6 +133,11 @@ export function useWebSocket(
         onNPCUpdate?.(msg.payload);
         break;
 
+      case 'ANIMAL_UPDATE':
+        setWorldState(prev => prev ? { ...prev, animals: msg.payload } : prev);
+        onAnimalUpdate?.(msg.payload);
+        break;
+
       case 'INVENTION':
         setWorldState(prev => prev ? { ...prev, inventions: [...(prev.inventions || []), msg.payload] } : prev);
         onInvention?.(msg.payload);
@@ -141,7 +147,7 @@ export function useWebSocket(
         console.error('[WS] Server error:', msg.payload);
         break;
     }
-  }, [onCharacterUpdate, onTileUpdate, onThought, onDayPhase, onNPCUpdate, onInvention]);
+  }, [onCharacterUpdate, onTileUpdate, onThought, onDayPhase, onNPCUpdate, onInvention, onAnimalUpdate]);
 
   const sendMessage = useCallback((msg: WSClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

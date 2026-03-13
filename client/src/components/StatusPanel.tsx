@@ -76,9 +76,11 @@ export function StatusPanel({ character, dayPhase, tick }: Props) {
   const timeLabel = `День ${day} · ${DAY_ICONS[dayPhase] ?? '?'} ${DAY_LABELS[dayPhase] ?? dayPhase}`;
 
   const inv = character.inventory;
-  const wood  = inv.find(i => i.type === 'wood')?.amount  ?? 0;
-  const stone = inv.find(i => i.type === 'stone')?.amount ?? 0;
-  const food  = inv.find(i => i.type === 'food')?.amount  ?? 0;
+  const wood    = inv.find(i => i.type === 'wood')?.amount    ?? 0;
+  const stone   = inv.find(i => i.type === 'stone')?.amount   ?? 0;
+  const food    = inv.find(i => i.type === 'food')?.amount    ?? 0;
+  const meat    = inv.find(i => i.type === 'meat')?.amount    ?? 0;
+  const leather = inv.find(i => i.type === 'leather')?.amount ?? 0;
 
   const homeLabels = ['Нет укрытия', 'Костёр', 'Укрытие', 'Хижина', 'Дом', 'Мастерская'];
 
@@ -103,10 +105,12 @@ export function StatusPanel({ character, dayPhase, tick }: Props) {
 
       <div style={{ borderTop: '1px solid #333', paddingTop: 8, marginTop: 8 }}>
         <div style={{ fontSize: 10, color: '#aaa', marginBottom: 5 }}>Инвентарь</div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <InventoryBadge icon="🪵" amount={wood}  label="Дерево" />
           <InventoryBadge icon="🪨" amount={stone} label="Камень" />
           <InventoryBadge icon="🫐" amount={food}  label="Еда" />
+          <InventoryBadge icon="🥩" amount={meat}  label="Мясо" />
+          <InventoryBadge icon="🧶" amount={leather} label="Кожа" />
         </div>
       </div>
 
@@ -145,6 +149,7 @@ const panelStyle: React.CSSProperties = {
   border: '1px solid #2a3a2a',
   borderRadius: 8,
   padding: '12px 14px',
-  width: 200,
+  width: '100%',
+  boxSizing: 'border-box',
   flexShrink: 0,
 };
