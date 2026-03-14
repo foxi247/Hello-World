@@ -86,6 +86,10 @@ export default function App() {
     sendMessage({ type: 'SEND_CHAT', payload: text });
   }, [sendMessage]);
 
+  const handleInviteNPC = useCallback((role: 'worker' | 'companion') => {
+    sendMessage({ type: 'INVITE_NPC', payload: role });
+  }, [sendMessage]);
+
   const char = character ?? worldState?.character ?? null;
 
   const dayPhaseRu: Record<string, string> = {
@@ -235,36 +239,75 @@ export default function App() {
           )}
 
           {/* NPC панель */}
-          {npcs.length > 0 && (
-            <div style={{
-              background: '#141414',
-              border: '1px solid #2a3a2a',
-              borderRadius: 8,
-              padding: '8px 10px',
-            }}>
-              <div style={{ fontSize: 11, color: '#88cc88', fontWeight: 'bold', marginBottom: 6 }}>
-                👥 Жители ({npcs.length})
-              </div>
-              {npcs.map(npc => (
-                <div key={npc.id} style={{
-                  fontSize: 10,
-                  color: '#aaccaa',
-                  padding: '2px 0',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 4,
-                }}>
-                  <span style={{ whiteSpace: 'nowrap' }}>
-                    {npc.role === 'worker' ? '⛏' : npc.role === 'companion' ? '♥' : '★'}{' '}
-                    {npc.name}
-                  </span>
-                  <span style={{ color: '#668866', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {npc.currentTask}
-                  </span>
-                </div>
-              ))}
+          <div style={{
+            background: '#141414',
+            border: '1px solid #2a3a2a',
+            borderRadius: 8,
+            padding: '8px 10px',
+          }}>
+            <div style={{ fontSize: 11, color: '#88cc88', fontWeight: 'bold', marginBottom: 6 }}>
+              👥 Жители {npcs.length > 0 ? `(${npcs.length})` : ''}
             </div>
-          )}
+            {npcs.map(npc => (
+              <div key={npc.id} style={{
+                fontSize: 10,
+                color: '#aaccaa',
+                padding: '2px 0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 4,
+              }}>
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  {npc.role === 'worker' ? '⛏' : npc.role === 'companion' ? '♥' : '★'}{' '}
+                  {npc.name}
+                </span>
+                <span style={{ color: '#668866', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {npc.currentTask}
+                </span>
+              </div>
+            ))}
+            {npcs.length === 0 && (
+              <div style={{ fontSize: 10, color: '#556655', marginBottom: 6 }}>
+                Пока никого нет...
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleInviteNPC('worker')}
+                disabled={!connected || npcs.filter(n => n.role === 'worker').length >= 5}
+                style={{
+                  flex: 1,
+                  padding: '4px 6px',
+                  fontSize: 10,
+                  background: '#1a2a1a',
+                  border: '1px solid #3a5a3a',
+                  borderRadius: 4,
+                  color: '#88cc88',
+                  cursor: 'pointer',
+                  opacity: !connected || npcs.filter(n => n.role === 'worker').length >= 5 ? 0.4 : 1,
+                }}
+              >
+                ⛏ Рабочий
+              </button>
+              <button
+                onClick={() => handleInviteNPC('companion')}
+                disabled={!connected || npcs.some(n => n.role === 'companion')}
+                style={{
+                  flex: 1,
+                  padding: '4px 6px',
+                  fontSize: 10,
+                  background: '#2a1a2a',
+                  border: '1px solid #5a3a5a',
+                  borderRadius: 4,
+                  color: '#cc88cc',
+                  cursor: 'pointer',
+                  opacity: !connected || npcs.some(n => n.role === 'companion') ? 0.4 : 1,
+                }}
+              >
+                💕 Спутница
+              </button>
+            </div>
+          </div>
 
           {/* Животные панель */}
           {animals.length > 0 && (

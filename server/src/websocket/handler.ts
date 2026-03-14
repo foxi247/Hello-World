@@ -90,6 +90,17 @@ export class WSHandler {
         });
         break;
       }
+
+      case 'INVITE_NPC': {
+        const role = msg.payload;
+        if (role === 'worker' || role === 'companion') {
+          this._simulation.inviteNPC(role);
+          this._broadcastNewEvents();
+          this._broadcast({ type: 'NPC_UPDATE', payload: this._world.npcs });
+          this._broadcast({ type: 'CHARACTER_UPDATE', payload: this._world.character });
+        }
+        break;
+      }
     }
   }
 

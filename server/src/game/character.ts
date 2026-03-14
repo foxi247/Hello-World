@@ -265,6 +265,12 @@ export function getAvailableActions(char: CharacterState): ActionType[] {
     actions.push('FARM');
   }
 
+  // Invite people when lonely or has enough home level
+  const npcCount = 0; // resolved at simulation level — always offer when has home
+  if (char.homeLevel >= 2 && (char.emotions?.loneliness ?? 0) > 40) {
+    actions.push('INVITE_NPC');
+  }
+
   // Изобретать можно если сыт, бодрый и в хорошем настроении
   if (char.needs.hunger > 50 && char.needs.energy > 40 && char.needs.mood > 40) {
     actions.push('INVENT');

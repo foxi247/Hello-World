@@ -189,6 +189,8 @@ export class Simulation {
           this._resolveTame();
         } else if (char.currentAction === 'FARM') {
           this._resolveFarm();
+        } else if (char.currentAction === 'INVITE_NPC') {
+          this._resolveInvite('auto');
         }
 
         char.currentAction = 'IDLE';
@@ -919,6 +921,62 @@ export class Simulation {
       this._world.addEvent('animal', `🌾 ${char.name} покормил ${farmed.length} животных и собрал продукты.`);
       this._callbacks.onNewEvent();
     }
+  }
+
+  // ----------------------------------------------------------
+  // Resolve invite NPC (called by AI action or manual WebSocket)
+  // ----------------------------------------------------------
+  private _resolveInvite(role: 'worker' | 'companion' | 'auto'): void {
+    const char = this._world.character;
+    const npcs = this._world.npcs;
+    const hasCompanion = npcs.some(n => n.role === 'companion');
+    const workers = npcs.filter(n => n.role === 'worker');
+
+    let spawnRole: 'worker' | 'companion';
+    if (role === 'auto') {
+      // Auto-decide based on state
+      if (!hasCompanion && char.homeLevel >= 3) {
+        spawnRole = Math.random() < 0.4 ? 'companion' : 'worker';
+      } else {
+        spawnRole = 'worker';
+      }
+    } else {
+      spawnRole = role;
+    }
+
+    // Companion: only one allowed
+    if (spawnRole === 'companion' && hasCompanion) {
+      spawnRole = 'worker';
+    }
+
+    // Workers: max 5
+    if (spawnRole === 'worker' && workers.length >= 5) {
+      this._world.addEvent('npc', `${char.name} не нашёл никого в лесу...`);
+      this._callbacks.onNewEvent();
+      return;
+    }
+
+    const npc = createNPC(spawnRole);
+    if (spawnRole === 'companion') {
+      npc.emotions.love = 20;
+      npc.emotions.excitement = 60;
+    }
+    this._world.addNPC(npc);
+
+    const msg = spawnRole === 'companion'
+      ? `💕 ${char.name} нашёл спутницу — ${npc.name}!`
+      : `👷 ${char.name} нашёл работника — ${npc.name}!`;
+
+    this._world.addEvent('npc', msg);
+    char.emotions.excitement = clamp(char.emotions.excitement + 30, 0, 100);
+    char.emotions.loneliness = clamp(char.emotions.loneliness - 25, 0, 100);
+    this._callbacks.onNewEvent();
+    this._callbacks.onNPCUpdate();
+  }
+
+  // Public method for WebSocket: player manually invites NPC
+  public inviteNPC(role: 'worker' | 'companion'): void {
+    this._resolveInvite(role);
   }
 
   // ----------------------------------------------------------

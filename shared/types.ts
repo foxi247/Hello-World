@@ -47,6 +47,7 @@ export type ActionType =
   | 'INVENT'
   | 'CRAFT'
   | 'MANAGE_NPC'
+  | 'INVITE_NPC'
   | 'HUNT'
   | 'TAME'
   | 'FARM'
@@ -213,4 +214,5 @@ export type WSServerMessage =
 // ============================================================
 export type WSClientMessage =
   | { type: 'SEND_CHAT';      payload: string }
+  | { type: 'INVITE_NPC';     payload: 'worker' | 'companion' }
   | { type: 'REQUEST_STATE' };

@@ -95,6 +95,11 @@ export function startAction(
       char.currentIntentLabel = 'управляет';
       return { eventMessage: `${char.name} раздаёт указания.` };
     }
+    case 'INVITE_NPC': {
+      char.targetPosition = randomPassableTile(tiles, char.position, 6);
+      char.currentIntentLabel = 'ищет людей';
+      return { eventMessage: `${char.name} отправился искать попутчиков.` };
+    }
     case 'HUNT': {
       char.targetPosition = randomPassableTile(tiles, char.position, 8);
       char.currentIntentLabel = 'охотится';
@@ -266,6 +271,15 @@ function executeAtTarget(
       char.actionProgress += 25;
       if (char.actionProgress >= 100) {
         return { completed: true, eventMessage: `${char.name} раздал указания.` };
+      }
+      return { completed: false };
+    }
+
+    case 'INVITE_NPC': {
+      char.actionProgress += 6;
+      char.currentIntentLabel = `ищет людей (${char.actionProgress}%)`;
+      if (char.actionProgress >= 100) {
+        return { completed: true, eventMessage: `${char.name} вернулся из поиска.` };
       }
       return { completed: false };
     }
